@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: SkyTraceCore
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            Packages/SkyTraceCore/.build
+            Packages/AstronomyEngine/.build
+          key: ${{ runner.os }}-swift-${{ hashFiles('Packages/**/Package.swift') }}
+          restore-keys: |
+            ${{ runner.os }}-swift-
+      - name: Test shared core
+        run: swift test --package-path Packages/SkyTraceCore
+
+  macos:
+    name: macOS
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        run: xcodegen generate
+      - name: Build macOS app
+        run: >-
+          xcodebuild -quiet
+          -project SkyTrace.xcodeproj
+          -scheme SkyTraceMac
+          -destination 'platform=macOS,arch=arm64'
+          -derivedDataPath build
+          CODE_SIGN_IDENTITY=-
+          build
+      - name: Test macOS unit tests
+        run: >-
+          xcodebuild -quiet
+          -project SkyTrace.xcodeproj
+          -scheme SkyTraceMac
+          -destination 'platform=macOS,arch=arm64'
+          -derivedDataPath build
+          CODE_SIGN_IDENTITY=-
+          -only-testing:SkyTraceMacTests
+          test
+
+  ios:
+    name: iOS
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        run: xcodegen generate
+      - name: Select simulator
+        id: simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          UDID=$(xcrun simctl list devices available | awk -F '[()]' '/iPhone/ { print $2; exit }')
+          test -n "$UDID"
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+      - name: Build iOS app
+        run: >-
+          xcodebuild -quiet
+          -project SkyTrace.xcodeproj
+          -scheme SkyTrace
+          -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}'
+          CODE_SIGNING_ALLOWED=NO
+          build
+      - name: Test iOS unit tests
+        run: >-
+          xcodebuild -quiet
+          -project SkyTrace.xcodeproj
+          -scheme SkyTrace
+          -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}'
+          CODE_SIGNING_ALLOWED=NO
+          -only-testing:SkyTraceTests
+          test

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/LyonZZZZzzzz/SkyTrace/security/advisories/new
+    about: 请通过私人安全公告报告漏洞，不要创建公开 Issue。
+  - name: Development guide
+    url: https://github.com/LyonZZZZzzzz/SkyTrace/blob/main/Docs/DEVELOPMENT_GUIDE.md
+    about: 查看环境搭建、构建、测试和架构说明。

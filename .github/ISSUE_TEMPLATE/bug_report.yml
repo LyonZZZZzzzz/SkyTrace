@@ -1,0 +1,50 @@
+name: Bug report
+description: 报告可复现的问题
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 平台
+      options:
+        - iOS
+        - iPadOS
+        - macOS
+        - Shared Core
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 系统与版本
+      placeholder: "例如：macOS 15.5 / iPhone 16 Pro, iOS 18.6"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 请说明预期行为、实际行为和影响范围
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开...
+        2. 点击...
+        3. 观察到...
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 截图、录屏和日志
+      description: 请上传可复现问题的证据
+  - type: textarea
+    id: environment
+    attributes:
+      label: 构建环境
+      placeholder: "Xcode、Swift、XcodeGen 版本；是否使用真机"

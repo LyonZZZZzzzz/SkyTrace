@@ -1,0 +1,41 @@
+name: Feature request
+description: 提议新功能或体验改进
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 需要解决的问题
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议方案
+      description: 描述用户操作、界面和预期结果
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 备选方案
+  - type: dropdown
+    id: platforms
+    attributes:
+      label: 目标平台
+      multiple: true
+      options:
+        - iOS
+        - iPadOS
+        - macOS
+        - Shared Core
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: 如何证明该功能已经正确完成？
+    validations:
+      required: true

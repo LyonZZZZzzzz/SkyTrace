@@ -15,3 +15,4 @@ SkyTrace/Info.plist
 *.xcscmblueprint
 *.profraw
 *.profdata
+SkyTraceMac/Info.plist

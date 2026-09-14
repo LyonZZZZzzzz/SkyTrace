@@ -1,0 +1,17 @@
+.DS_Store
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+SkyTrace.xcodeproj/
+.swiftpm/
+.vscode/ipch/
+
+.build/
+**/.build/
+SkyTrace/Info.plist
+*.xcresult/
+*.xccheckout
+*.xcscmblueprint
+*.profraw
+*.profdata

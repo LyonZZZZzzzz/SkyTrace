@@ -1,0 +1,90 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "SkyTrace: Generate Project",
+      "type": "shell",
+      "command": "xcodegen",
+      "args": ["generate"],
+      "problemMatcher": []
+    },
+    {
+      "label": "SkyTrace: Build iOS Simulator",
+      "type": "shell",
+      "command": "xcodebuild",
+      "args": [
+        "-project", "SkyTrace.xcodeproj",
+        "-scheme", "SkyTrace",
+        "-sdk", "iphonesimulator",
+        "-destination", "platform=iOS Simulator,name=iPhone 16 Pro,OS=18.6",
+        "CODE_SIGNING_ALLOWED=NO",
+        "build"
+      ],
+      "dependsOn": "SkyTrace: Generate Project",
+      "group": { "kind": "build" },
+      "problemMatcher": []
+    },
+    {
+      "label": "SkyTrace: Test iOS",
+      "type": "shell",
+      "command": "xcodebuild",
+      "args": [
+        "-project", "SkyTrace.xcodeproj",
+        "-scheme", "SkyTrace",
+        "-destination", "platform=iOS Simulator,name=iPhone 16 Pro,OS=18.6",
+        "CODE_SIGNING_ALLOWED=NO",
+        "test"
+      ],
+      "dependsOn": "SkyTrace: Generate Project",
+      "problemMatcher": []
+    },
+    {
+      "label": "SkyTrace: Build macOS",
+      "type": "shell",
+      "command": "xcodebuild",
+      "args": [
+        "-project", "SkyTrace.xcodeproj",
+        "-scheme", "SkyTraceMac",
+        "-configuration", "Debug",
+        "-destination", "platform=macOS,arch=arm64",
+        "-derivedDataPath", "build",
+        "CODE_SIGN_IDENTITY=-",
+        "build"
+      ],
+      "dependsOn": "SkyTrace: Generate Project",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "SkyTrace: Test macOS",
+      "type": "shell",
+      "command": "xcodebuild",
+      "args": [
+        "-project", "SkyTrace.xcodeproj",
+        "-scheme", "SkyTraceMac",
+        "-destination", "platform=macOS,arch=arm64",
+        "-derivedDataPath", "build",
+        "CODE_SIGN_IDENTITY=-",
+        "test"
+      ],
+      "dependsOn": "SkyTrace: Generate Project",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "SkyTrace: Run macOS",
+      "type": "shell",
+      "command": "open",
+      "args": ["${workspaceFolder}/build/Build/Products/Debug/SkyTrace.app"],
+      "dependsOn": "SkyTrace: Build macOS",
+      "problemMatcher": []
+    },
+    {
+      "label": "SkyTrace: Test Core Package",
+      "type": "shell",
+      "command": "swift",
+      "args": ["test", "--package-path", "Packages/SkyTraceCore"],
+      "problemMatcher": []
+    }
+  ]
+}

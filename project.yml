@@ -1,0 +1,192 @@
+name: SkyTrace
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget:
+    iOS: "17.0"
+    macOS: "14.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+packages:
+  SkyTraceCore:
+    path: Packages/SkyTraceCore
+  SkyTraceUI:
+    path: Packages/SkyTraceUI
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: minimal
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+
+targets:
+  SkyTrace:
+    type: application
+    platform: iOS
+    sources:
+      - path: SkyTrace
+        excludes:
+          - Resources
+      - path: SkyTrace/Resources/Assets.xcassets
+        buildPhase: resources
+      - path: SkyTrace/Resources/Localizable.xcstrings
+        buildPhase: resources
+    dependencies:
+      - package: SkyTraceCore
+        product: SkyTraceCore
+      - package: SkyTraceUI
+        product: SkyTraceUI
+    info:
+      path: SkyTrace/Info.plist
+      properties:
+        CFBundleDisplayName: 星迹
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        NSLocationWhenInUseUsageDescription: 星迹需要你的位置来计算地平线方向和可见星空。
+        NSMotionUsageDescription: 星迹使用设备姿态让你举机浏览天空。
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.SkyTrace
+        PRODUCT_NAME: SkyTrace
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: NO
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_ASSET_PATHS: ""
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+
+  SkyTraceMac:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: SkyTraceMac
+        excludes:
+          - Resources
+      - path: SkyTraceMac/Resources/Assets.xcassets
+        buildPhase: resources
+    dependencies:
+      - package: SkyTraceCore
+        product: SkyTraceCore
+      - package: SkyTraceUI
+        product: SkyTraceUI
+    info:
+      path: SkyTraceMac/Info.plist
+      properties:
+        CFBundleDisplayName: 星迹
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSMinimumSystemVersion: "14.0"
+        LSApplicationCategoryType: public.app-category.education
+        NSLocationWhenInUseUsageDescription: 星迹需要你的位置来计算地平线方向和可见星空。
+        NSHumanReadableCopyright: Copyright © 2026 SkyTrace
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.SkyTraceMac
+        PRODUCT_NAME: SkyTrace
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ARCHS: arm64
+        ONLY_ACTIVE_ARCH: YES
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
+        ENABLE_HARDENED_RUNTIME: NO
+        ENABLE_APP_SANDBOX: NO
+        COMBINE_HIDPI_IMAGES: YES
+
+  SkyTraceTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: SkyTraceTests
+    dependencies:
+      - target: SkyTrace
+      - package: SkyTraceCore
+        product: SkyTraceCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.SkyTraceTests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/SkyTrace.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/SkyTrace
+        BUNDLE_LOADER: $(TEST_HOST)
+
+  SkyTraceUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: SkyTraceUITests
+    dependencies:
+      - target: SkyTrace
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.SkyTraceUITests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: SkyTrace
+
+  SkyTraceMacTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: SkyTraceMacTests
+    dependencies:
+      - target: SkyTraceMac
+      - package: SkyTraceCore
+        product: SkyTraceCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.SkyTraceMacTests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/SkyTrace.app/Contents/MacOS/SkyTrace
+        BUNDLE_LOADER: $(TEST_HOST)
+
+  SkyTraceMacUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: SkyTraceMacUITests
+    dependencies:
+      - target: SkyTraceMac
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.SkyTraceMacUITests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: SkyTraceMac
+
+
+schemes:
+  SkyTrace:
+    build:
+      targets:
+        SkyTrace: all
+        SkyTraceTests: [test]
+        SkyTraceUITests: [test]
+    test:
+      targets:
+        - SkyTraceTests
+        - SkyTraceUITests
+  SkyTraceMac:
+    build:
+      targets:
+        SkyTraceMac: all
+        SkyTraceMacTests: [test]
+        SkyTraceMacUITests: [test]
+    test:
+      targets:
+        - SkyTraceMacTests
+        - SkyTraceMacUITests

@@ -1,0 +1,9 @@
+{
+  "swift.sourcekit-lsp.backgroundIndexing": "on",
+  "sweetpad.build.xcodeWorkspace": "SkyTrace.xcodeproj",
+  "files.exclude": {
+    "**/.DS_Store": true,
+    "**/DerivedData": true
+  },
+  "editor.formatOnSave": false
+}

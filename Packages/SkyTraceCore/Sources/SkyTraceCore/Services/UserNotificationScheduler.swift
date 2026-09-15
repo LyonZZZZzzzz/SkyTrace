@@ -54,6 +54,7 @@ public final class UserNotificationScheduler: ObservationReminderScheduling {
         center.removePendingNotificationRequests(withIdentifiers: [identifier])
         do {
             try await center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: trigger))
+            SkyTraceDiagnostics.notifications.info("Scheduled observation reminder")
         } catch {
             throw ObservationReminderError.schedulingFailed(error.localizedDescription)
         }

@@ -9,21 +9,31 @@ struct MacTonightSheet: View {
 
     var body: some View {
         NavigationStack {
-            TonightPlanContent(
+            ObservatoryCenterView(
                 plan: viewModel.observationPlan,
-                state: viewModel.observationPlanState,
+                planState: viewModel.observationPlanState,
                 favoriteIDs: viewModel.favoriteIDs,
-                onSelect: onSelect,
-                onToggleFavorite: viewModel.toggleFavorite
+                events: viewModel.astronomyEvents,
+                eventState: viewModel.astronomyEventState,
+                logs: viewModel.observationLogs,
+                timeZone: viewModel.observer.timeZone,
+                onSelectObject: onSelect,
+                onToggleFavorite: viewModel.toggleFavorite,
+                onSelectEvent: { event in
+                    viewModel.focus(on: event)
+                    dismiss()
+                },
+                onDeleteLog: { log in
+                    Task { await viewModel.deleteObservationLog(id: log.id) }
+                }
             )
-            .navigationTitle("今晚观测计划")
+            .navigationTitle("观星中心")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("关闭") { dismiss() }
                 }
             }
         }
-        .frame(minWidth: 620, minHeight: 560)
+        .frame(minWidth: 700, minHeight: 620)
     }
-
 }

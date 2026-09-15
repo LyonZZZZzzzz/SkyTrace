@@ -4,6 +4,7 @@ import SwiftUI
 
 struct MacInspectorView: View {
     @Bindable var viewModel: SkyViewModel
+    @State private var showLogForm = false
 
     var body: some View {
         Group {
@@ -20,7 +21,8 @@ struct MacInspectorView: View {
                         onToggleFavorite: { viewModel.toggleFavorite(object) },
                         onToggleReminder: {
                             Task { await viewModel.toggleReminder(for: object) }
-                        }
+                        },
+                        onAddLog: { showLogForm = true }
                     )
                     .padding(18)
                 }
@@ -29,6 +31,23 @@ struct MacInspectorView: View {
             }
         }
         .navigationTitle("检查器")
+        .sheet(isPresented: $showLogForm) {
+            if let object = viewModel.selectedObject {
+                ObservationLogForm(
+                    object: object,
+                    observer: viewModel.observer,
+                    onSave: { entry in
+                        Task {
+                            if await viewModel.saveObservationLog(entry) {
+                                showLogForm = false
+                            }
+                        }
+                    },
+                    onCancel: { showLogForm = false }
+                )
+                .frame(minWidth: 480, minHeight: 520)
+            }
+        }
     }
 
     private var overview: some View {

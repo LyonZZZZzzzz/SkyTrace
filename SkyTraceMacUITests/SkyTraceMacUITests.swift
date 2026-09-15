@@ -17,6 +17,7 @@ final class SkyTraceMacUITests: XCTestCase {
         XCTAssertTrue(planButton.waitForExistence(timeout: 5))
         planButton.click()
         XCTAssertTrue(app.staticTexts["今夜时间线"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["天空事件"].exists)
         app.buttons["关闭"].click()
 
         app.activate()

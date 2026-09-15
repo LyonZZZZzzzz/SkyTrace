@@ -236,7 +236,7 @@ SwiftUI 标签层必须使用同一个 `basis` 投影。禁止在平台手势代
 
 这样名称会稳定落在对应连线网络的中心。
 
-## 13. 观测计划与提醒
+## 13. 观测计划、日志与事件
 
 v1.1 新增 `ObservationPlanner`：
 
@@ -253,6 +253,21 @@ v1.1 新增 `ObservationPlanner`：
 `UserNotificationScheduler`，Core 测试使用 Noop 或测试替身。
 
 通知权限只在用户主动开启提醒时请求，拒绝权限不会影响收藏和星图使用。
+
+观测日志使用 Application Support 下的 `observation-log.json`：
+
+- 原子写入，避免中断造成半写入文件
+- 支持创建、编辑、删除和筛选
+- 损坏文件会先备份为 `observation-log-corrupt-<timestamp>.json`
+- 首版不保存照片，也不上传日志
+
+离线天空事件由 `AstronomyEventPlanner` 生成：
+
+- 默认范围 120 天
+- 月相和季节直接调用 Astronomy Engine
+- 日月食按当地观测者计算
+- 行星合按 6 小时采样和三分法细化，阈值为 5°
+- 结果按地点和日期范围缓存
 
 ## 14. 构建
 

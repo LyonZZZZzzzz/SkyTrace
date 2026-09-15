@@ -11,6 +11,7 @@ public struct ObjectDetailsContent: View {
     public var isReminderEnabled: Bool
     public var onToggleFavorite: (() -> Void)?
     public var onToggleReminder: (() -> Void)?
+    public var onAddLog: (() -> Void)?
 
     public init(
         object: CelestialObject,
@@ -21,7 +22,8 @@ public struct ObjectDetailsContent: View {
         isFavorite: Bool = false,
         isReminderEnabled: Bool = false,
         onToggleFavorite: (() -> Void)? = nil,
-        onToggleReminder: (() -> Void)? = nil
+        onToggleReminder: (() -> Void)? = nil,
+        onAddLog: (() -> Void)? = nil
     ) {
         self.object = object
         self.position = position
@@ -32,6 +34,7 @@ public struct ObjectDetailsContent: View {
         self.isReminderEnabled = isReminderEnabled
         self.onToggleFavorite = onToggleFavorite
         self.onToggleReminder = onToggleReminder
+        self.onAddLog = onAddLog
     }
 
     public var body: some View {
@@ -52,7 +55,7 @@ public struct ObjectDetailsContent: View {
                 }
             }
 
-            if onToggleFavorite != nil || onToggleReminder != nil {
+            if onToggleFavorite != nil || onToggleReminder != nil || onAddLog != nil {
                 HStack(spacing: 10) {
                     if let onToggleFavorite {
                         Button(action: onToggleFavorite) {
@@ -67,6 +70,13 @@ public struct ObjectDetailsContent: View {
                         }
                         .buttonStyle(.bordered)
                         .tint(isReminderEnabled ? .skyMint : .skyCyan)
+                    }
+                    if let onAddLog {
+                        Button(action: onAddLog) {
+                            Label("记录观测", systemImage: "square.and.pencil")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.skyCyan)
                     }
                     Spacer()
                 }

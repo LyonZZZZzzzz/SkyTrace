@@ -32,6 +32,10 @@ public final class SkyViewModel {
 
     public private(set) var observationPlan: ObservationPlan?
     public private(set) var observationPlanState: ObservationPlanState = .idle
+    public private(set) var observationLogs: [ObservationLogEntry] = []
+    public private(set) var observationLogError: String?
+    public private(set) var astronomyEvents: [AstronomyEvent] = []
+    public private(set) var astronomyEventState: ObservationPlanState = .idle
     public private(set) var reminderAuthorization: ObservationNotificationAuthorization = .notDetermined
     public var minimumObservationAltitude = 10.0
 
@@ -45,11 +49,14 @@ public final class SkyViewModel {
     @ObservationIgnored public let motionService: any DeviceMotionProviding
     @ObservationIgnored public let favoriteStore: FavoriteStore
     @ObservationIgnored public let reminderScheduler: any ObservationReminderScheduling
+    @ObservationIgnored public let logRepository: ObservationLogRepository
+    @ObservationIgnored private let eventPlanner: any AstronomyEventPlanning
     @ObservationIgnored private let astronomy: any AstronomyCalculating
     @ObservationIgnored private let planner: any ObservationPlanning
     @ObservationIgnored private var playbackTask: Task<Void, Never>?
     @ObservationIgnored private var toastTask: Task<Void, Never>?
     @ObservationIgnored private var planTask: Task<Void, Never>?
+    @ObservationIgnored private var eventTask: Task<Void, Never>?
 
     public convenience init() {
         self.init(
@@ -75,7 +82,9 @@ public final class SkyViewModel {
         catalog: (any SkyCatalogProviding)? = nil,
         planner: (any ObservationPlanning)? = nil,
         favoriteStore: FavoriteStore? = nil,
-        reminderScheduler: (any ObservationReminderScheduling)? = nil
+        reminderScheduler: (any ObservationReminderScheduling)? = nil,
+        logRepository: ObservationLogRepository? = nil,
+        eventPlanner: (any AstronomyEventPlanning)? = nil
     ) {
         self.locationService = locationService
         self.motionService = motionService
@@ -83,6 +92,8 @@ public final class SkyViewModel {
         self.planner = planner ?? ObservationPlanner(astronomy: astronomy)
         self.favoriteStore = favoriteStore ?? FavoriteStore()
         self.reminderScheduler = reminderScheduler ?? NoopObservationReminderScheduler()
+        self.logRepository = logRepository ?? ObservationLogRepository()
+        self.eventPlanner = eventPlanner ?? AstronomyEventPlanner(astronomy: astronomy)
         observer = Self.loadObserver() ?? .shanghai
         moment = .now
 
@@ -108,6 +119,7 @@ public final class SkyViewModel {
             guard let self else { return }
             await self.reminderScheduler.refreshAuthorizationStatus()
             self.reminderAuthorization = self.reminderScheduler.authorizationStatus
+            await self.loadObservationLogs()
             self.scheduleObservationPlanRefresh()
         }
     }
@@ -116,6 +128,7 @@ public final class SkyViewModel {
         playbackTask?.cancel()
         toastTask?.cancel()
         planTask?.cancel()
+        eventTask?.cancel()
     }
 
     public var cameraAzimuth: Double {
@@ -161,6 +174,47 @@ public final class SkyViewModel {
 
     public func visibility(for objectID: String) -> ObservationVisibility? {
         visibilityByObjectID[objectID]
+    }
+
+    public func observationLogs(for objectID: String) -> [ObservationLogEntry] {
+        observationLogs.filter { $0.objectID == objectID }
+    }
+
+    public func loadObservationLogs(filter: ObservationLogFilter = ObservationLogFilter()) async {
+        do {
+            observationLogs = try await logRepository.entries(matching: filter)
+            observationLogError = nil
+            if filter == ObservationLogFilter(), let validIDs = repository.map({ Set($0.allObjects.map(\.id)) }) {
+                try? await logRepository.removeUnknownObjects(validIDs: validIDs)
+            }
+        } catch {
+            observationLogError = error.localizedDescription
+            observationLogs = []
+        }
+    }
+
+    @discardableResult
+    public func saveObservationLog(_ entry: ObservationLogEntry) async -> Bool {
+        do {
+            _ = try await logRepository.save(entry)
+            await loadObservationLogs()
+            showToast("观测记录已保存")
+            return true
+        } catch {
+            observationLogError = error.localizedDescription
+            showToast(error.localizedDescription)
+            return false
+        }
+    }
+
+    public func deleteObservationLog(id: UUID) async {
+        do {
+            try await logRepository.delete(id: id)
+            await loadObservationLogs()
+        } catch {
+            observationLogError = error.localizedDescription
+            showToast(error.localizedDescription)
+        }
     }
 
     public func isFavorite(_ objectID: String) -> Bool {
@@ -263,6 +317,8 @@ public final class SkyViewModel {
 
     public func refreshSnapshot(updateObservationPlan: Bool = true) {
         guard let repository else { return }
+        SkyTraceDiagnostics.event("SnapshotBuildStarted")
+        defer { SkyTraceDiagnostics.event("SnapshotBuildCompleted") }
         let transform = astronomy.horizontalTransform(for: moment, observer: observer)
 
         var segments: [ConstellationSegment] = []
@@ -342,6 +398,7 @@ public final class SkyViewModel {
         )
         if updateObservationPlan {
             scheduleObservationPlanRefresh()
+            scheduleAstronomyEventRefresh()
         }
     }
 
@@ -480,6 +537,47 @@ public final class SkyViewModel {
             } catch {
                 self?.observationPlanState = .failed(error.localizedDescription)
             }
+        }
+    }
+
+    public func refreshAstronomyEvents() {
+        guard let repository else { return }
+        eventTask?.cancel()
+        astronomyEventState = .loading
+        let startDate = moment.date
+        let endDate = startDate.addingTimeInterval(120 * 24 * 3600)
+        let observer = observer
+        let objects = repository.allObjects
+        let eventPlanner = eventPlanner
+
+        eventTask = Task { @MainActor [weak self] in
+            let events = await eventPlanner.events(
+                from: startDate,
+                through: endDate,
+                observer: observer,
+                objects: objects
+            )
+            guard !Task.isCancelled, let self else { return }
+            self.astronomyEvents = events
+            self.astronomyEventState = .ready
+            SkyTraceDiagnostics.event("AstronomyEventsCompleted")
+        }
+    }
+
+    private func scheduleAstronomyEventRefresh() {
+        eventTask?.cancel()
+        astronomyEventState = .loading
+        eventTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            self?.refreshAstronomyEvents()
+        }
+    }
+
+    public func focus(on event: AstronomyEvent) {
+        setDate(event.date, recenter: false)
+        if let objectID = event.objectIDs.first {
+            center(on: objectID)
         }
     }
 

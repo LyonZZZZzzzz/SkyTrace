@@ -132,6 +132,11 @@ private struct ShortWindowAstronomy: AstronomyCalculating {
         return base.addingTimeInterval(direction == .setting ? 8 * 3600 : 16 * 3600)
     }
 
+    func nextMoonQuarter(after date: Date) -> AstronomyMoonQuarter? { nil }
+    func nextLunarEclipse(after date: Date, observer: ObserverContext) -> AstronomyEclipse? { nil }
+    func nextLocalSolarEclipse(after date: Date, observer: ObserverContext) -> AstronomyEclipse? { nil }
+    func seasons(year: Int) -> AstronomySeasonEvents? { nil }
+
     func moonInfo(date: Date) -> AstronomyMoonInfo {
         AstronomyMoonInfo(phaseAngle: 180, illuminationFraction: 1, magnitude: -12)
     }

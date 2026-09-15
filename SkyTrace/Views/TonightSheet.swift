@@ -9,14 +9,25 @@ struct TonightSheet: View {
 
     var body: some View {
         NavigationStack {
-            TonightPlanContent(
+            ObservatoryCenterView(
                 plan: viewModel.observationPlan,
-                state: viewModel.observationPlanState,
+                planState: viewModel.observationPlanState,
                 favoriteIDs: viewModel.favoriteIDs,
-                onSelect: onSelect,
-                onToggleFavorite: viewModel.toggleFavorite
+                events: viewModel.astronomyEvents,
+                eventState: viewModel.astronomyEventState,
+                logs: viewModel.observationLogs,
+                timeZone: viewModel.observer.timeZone,
+                onSelectObject: onSelect,
+                onToggleFavorite: viewModel.toggleFavorite,
+                onSelectEvent: { event in
+                    viewModel.focus(on: event)
+                    dismiss()
+                },
+                onDeleteLog: { log in
+                    Task { await viewModel.deleteObservationLog(id: log.id) }
+                }
             )
-            .navigationTitle("今晚观测计划")
+            .navigationTitle("观星中心")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

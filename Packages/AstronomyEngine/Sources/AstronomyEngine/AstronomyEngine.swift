@@ -86,6 +86,40 @@ public struct AstronomyMoonInfo: Equatable, Sendable {
     }
 }
 
+public enum AstronomyMoonQuarterKind: Int, Sendable {
+    case newMoon = 0
+    case firstQuarter = 1
+    case fullMoon = 2
+    case lastQuarter = 3
+}
+
+public struct AstronomyMoonQuarter: Equatable, Sendable {
+    public let kind: AstronomyMoonQuarterKind
+    public let date: Date
+}
+
+public enum AstronomyEclipseKind: Int, Sendable {
+    case none = 0
+    case penumbral = 1
+    case partial = 2
+    case annular = 3
+    case total = 4
+}
+
+public struct AstronomyEclipse: Equatable, Sendable {
+    public let kind: AstronomyEclipseKind
+    public let peak: Date
+    public let obscuration: Double
+    public let altitude: Double
+}
+
+public struct AstronomySeasonEvents: Equatable, Sendable {
+    public let marchEquinox: Date
+    public let juneSolstice: Date
+    public let septemberEquinox: Date
+    public let decemberSolstice: Date
+}
+
 /// A reusable J2000-to-horizontal matrix. Build it once per time/location update,
 /// then transform thousands of catalog stars without repeated ephemeris work.
 public struct HorizontalTransform: Sendable {
@@ -243,6 +277,68 @@ public enum AstronomyEngine {
             altitude
         )
         return result.status == ASTRO_SUCCESS ? date(from: result.time) : nil
+    }
+
+    public static func nextMoonQuarter(after date: Date) -> AstronomyMoonQuarter? {
+        let result = Astronomy_SearchMoonQuarter(makeTime(date))
+        guard result.status == ASTRO_SUCCESS else { return nil }
+        guard let kind = AstronomyMoonQuarterKind(rawValue: Int(result.quarter)) else { return nil }
+        return AstronomyMoonQuarter(kind: kind, date: self.date(from: result.time))
+    }
+
+    public static func nextLunarEclipse(
+        after date: Date,
+        latitude: Double,
+        longitude: Double,
+        height: Double = 0
+    ) -> AstronomyEclipse? {
+        let start = makeTime(date)
+        let result = Astronomy_SearchLunarEclipse(start)
+        guard result.status == ASTRO_SUCCESS,
+              let kind = AstronomyEclipseKind(rawValue: Int(result.kind.rawValue)) else { return nil }
+        let peak = self.date(from: result.peak)
+        let coordinate = horizontal(
+            body: .moon,
+            date: peak,
+            latitude: latitude,
+            longitude: longitude,
+            height: height
+        )
+        return AstronomyEclipse(
+            kind: kind,
+            peak: peak,
+            obscuration: result.obscuration,
+            altitude: coordinate.altitude
+        )
+    }
+
+    public static func nextLocalSolarEclipse(
+        after date: Date,
+        latitude: Double,
+        longitude: Double,
+        height: Double = 0
+    ) -> AstronomyEclipse? {
+        let observer = Astronomy_MakeObserver(latitude, longitude, height)
+        let result = Astronomy_SearchLocalSolarEclipse(makeTime(date), observer)
+        guard result.status == ASTRO_SUCCESS,
+              let kind = AstronomyEclipseKind(rawValue: Int(result.kind.rawValue)) else { return nil }
+        return AstronomyEclipse(
+            kind: kind,
+            peak: self.date(from: result.peak.time),
+            obscuration: result.obscuration,
+            altitude: result.peak.altitude
+        )
+    }
+
+    public static func seasons(year: Int) -> AstronomySeasonEvents? {
+        let result = Astronomy_Seasons(Int32(year))
+        guard result.status == ASTRO_SUCCESS else { return nil }
+        return AstronomySeasonEvents(
+            marchEquinox: date(from: result.mar_equinox),
+            juneSolstice: date(from: result.jun_solstice),
+            septemberEquinox: date(from: result.sep_equinox),
+            decemberSolstice: date(from: result.dec_solstice)
+        )
     }
 
     private static func date(from time: astro_time_t) -> Date {

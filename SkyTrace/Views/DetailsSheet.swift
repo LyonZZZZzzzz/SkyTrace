@@ -7,6 +7,7 @@ struct DetailsSheet: View {
     let object: CelestialObject
     let position: SkyPosition?
     @Environment(\.dismiss) private var dismiss
+    @State private var showLogForm = false
 
     var body: some View {
         NavigationStack {
@@ -21,7 +22,8 @@ struct DetailsSheet: View {
                     onToggleFavorite: { viewModel.toggleFavorite(object) },
                     onToggleReminder: {
                         Task { await viewModel.toggleReminder(for: object) }
-                    }
+                    },
+                    onAddLog: { showLogForm = true }
                 )
                 .padding(20)
             }
@@ -34,5 +36,19 @@ struct DetailsSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+        .sheet(isPresented: $showLogForm) {
+            ObservationLogForm(
+                object: object,
+                observer: viewModel.observer,
+                onSave: { entry in
+                    Task {
+                        if await viewModel.saveObservationLog(entry) {
+                            showLogForm = false
+                        }
+                    }
+                },
+                onCancel: { showLogForm = false }
+            )
+        }
     }
 }

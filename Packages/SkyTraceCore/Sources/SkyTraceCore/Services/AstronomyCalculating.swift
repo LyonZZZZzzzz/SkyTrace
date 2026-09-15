@@ -18,6 +18,10 @@ public protocol AstronomyCalculating: Sendable {
         searchDays: Double
     ) -> Date?
     func moonInfo(date: Date) -> AstronomyMoonInfo
+    func nextMoonQuarter(after date: Date) -> AstronomyMoonQuarter?
+    func nextLunarEclipse(after date: Date, observer: ObserverContext) -> AstronomyEclipse?
+    func nextLocalSolarEclipse(after date: Date, observer: ObserverContext) -> AstronomyEclipse?
+    func seasons(year: Int) -> AstronomySeasonEvents?
     func horizontal(
         body: AstronomyBody,
         date: Date,
@@ -83,6 +87,32 @@ public struct AstronomyService: AstronomyCalculating {
 
     public func moonInfo(date: Date) -> AstronomyMoonInfo {
         AstronomyEngine.moonInfo(date: date)
+    }
+
+    public func nextMoonQuarter(after date: Date) -> AstronomyMoonQuarter? {
+        AstronomyEngine.nextMoonQuarter(after: date)
+    }
+
+    public func nextLunarEclipse(after date: Date, observer: ObserverContext) -> AstronomyEclipse? {
+        AstronomyEngine.nextLunarEclipse(
+            after: date,
+            latitude: observer.latitude,
+            longitude: observer.longitude,
+            height: observer.altitude
+        )
+    }
+
+    public func nextLocalSolarEclipse(after date: Date, observer: ObserverContext) -> AstronomyEclipse? {
+        AstronomyEngine.nextLocalSolarEclipse(
+            after: date,
+            latitude: observer.latitude,
+            longitude: observer.longitude,
+            height: observer.altitude
+        )
+    }
+
+    public func seasons(year: Int) -> AstronomySeasonEvents? {
+        AstronomyEngine.seasons(year: year)
     }
 
     public func horizontal(

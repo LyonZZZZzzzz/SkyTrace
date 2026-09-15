@@ -35,6 +35,8 @@ Contains:
 - Astronomy calculations
 - Observation planning and visibility windows
 - Favorites and local notification scheduling
+- Observation log persistence
+- Offline astronomy event planning
 - SkyViewModel
 - Camera state and projection
 - Shared SceneKit scene controller

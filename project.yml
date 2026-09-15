@@ -19,8 +19,8 @@ settings:
     SWIFT_STRICT_CONCURRENCY: minimal
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
-    MARKETING_VERSION: "1.1.0"
-    CURRENT_PROJECT_VERSION: "2"
+    MARKETING_VERSION: "1.2.0"
+    CURRENT_PROJECT_VERSION: "3"
     ENABLE_USER_SCRIPT_SANDBOXING: YES
 
 targets:
@@ -34,6 +34,8 @@ targets:
       - path: SkyTrace/Resources/Assets.xcassets
         buildPhase: resources
       - path: SkyTrace/Resources/Localizable.xcstrings
+        buildPhase: resources
+      - path: SkyTrace/Resources/PrivacyInfo.xcprivacy
         buildPhase: resources
     dependencies:
       - package: SkyTraceCore
@@ -61,7 +63,7 @@ targets:
           - UIInterfaceOrientationLandscapeRight
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.SkyTrace
+        PRODUCT_BUNDLE_IDENTIFIER: com.lyonzzzzzzzz.SkyTrace
         PRODUCT_NAME: SkyTrace
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
@@ -81,6 +83,8 @@ targets:
           - Resources
       - path: SkyTraceMac/Resources/Assets.xcassets
         buildPhase: resources
+      - path: SkyTraceMac/Resources/PrivacyInfo.xcprivacy
+        buildPhase: resources
     dependencies:
       - package: SkyTraceCore
         product: SkyTraceCore
@@ -98,7 +102,7 @@ targets:
         NSHumanReadableCopyright: Copyright © 2026 SkyTrace
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.SkyTraceMac
+        PRODUCT_BUNDLE_IDENTIFIER: com.lyonzzzzzzzz.SkyTrace.mac
         PRODUCT_NAME: SkyTrace
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
@@ -121,7 +125,7 @@ targets:
         product: SkyTraceCore
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.SkyTraceTests
+        PRODUCT_BUNDLE_IDENTIFIER: com.lyonzzzzzzzz.SkyTrace.tests
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/SkyTrace.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/SkyTrace
         BUNDLE_LOADER: $(TEST_HOST)
@@ -135,7 +139,7 @@ targets:
       - target: SkyTrace
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.SkyTraceUITests
+        PRODUCT_BUNDLE_IDENTIFIER: com.lyonzzzzzzzz.SkyTrace.uitests
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: SkyTrace
 
@@ -150,7 +154,7 @@ targets:
         product: SkyTraceCore
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.SkyTraceMacTests
+        PRODUCT_BUNDLE_IDENTIFIER: com.lyonzzzzzzzz.SkyTrace.mac.tests
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/SkyTrace.app/Contents/MacOS/SkyTrace
         BUNDLE_LOADER: $(TEST_HOST)
@@ -164,7 +168,7 @@ targets:
       - target: SkyTraceMac
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.SkyTraceMacUITests
+        PRODUCT_BUNDLE_IDENTIFIER: com.lyonzzzzzzzz.SkyTrace.mac.uitests
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: SkyTraceMac
 

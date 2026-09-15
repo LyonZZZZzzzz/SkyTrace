@@ -31,6 +31,8 @@ public struct CatalogRepository: Sendable {
     }
 
     public init(bundle: Bundle) throws {
+        SkyTraceDiagnostics.catalog.info("Loading bundled catalog")
+        defer { SkyTraceDiagnostics.event("CatalogLoadCompleted") }
         let starsData = try Self.resource(named: "Stars", extension: "bin", bundle: bundle)
         let labelsData = try Self.resource(named: "StarLabels", extension: "json", bundle: bundle)
         let constellationsData = try Self.resource(named: "Constellations", extension: "json", bundle: bundle)

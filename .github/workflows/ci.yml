@@ -52,6 +52,10 @@ jobs:
           -derivedDataPath build
           CODE_SIGN_IDENTITY=-
           build
+      - name: Validate macOS bundle metadata
+        run: |
+          test -f build/Build/Products/Debug/SkyTrace.app/Contents/Resources/PrivacyInfo.xcprivacy
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' build/Build/Products/Debug/SkyTrace.app/Contents/Info.plist)" = "com.lyonzzzzzzzz.SkyTrace.mac"
       - name: Test macOS unit tests
         run: >-
           xcodebuild -quiet
@@ -87,14 +91,20 @@ jobs:
           -project SkyTrace.xcodeproj
           -scheme SkyTrace
           -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}'
+          -derivedDataPath build-ios
           CODE_SIGNING_ALLOWED=NO
           build
+      - name: Validate iOS bundle metadata
+        run: |
+          test -f build-ios/Build/Products/Debug-iphonesimulator/SkyTrace.app/PrivacyInfo.xcprivacy
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' build-ios/Build/Products/Debug-iphonesimulator/SkyTrace.app/Info.plist)" = "com.lyonzzzzzzzz.SkyTrace"
       - name: Test iOS unit tests
         run: >-
           xcodebuild -quiet
           -project SkyTrace.xcodeproj
           -scheme SkyTrace
           -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}'
+          -derivedDataPath build-ios
           CODE_SIGNING_ALLOWED=NO
           -only-testing:SkyTraceTests
           test

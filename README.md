@@ -27,6 +27,9 @@ SkyTrace 是一个完全离线的原生星图浏览应用，支持 iPhone、iPad
 - 目标最佳观测时刻、可见时长和推荐原因
 - 恒星、行星、太阳、月球、星座和梅西耶天体收藏
 - 用户主动开启的本地最佳时刻提醒
+- 轻量观测日志：评分、天气、设备和备注
+- 未来 120 天离线天空事件：月相、日月食、行星合和节气
+- Apple 隐私清单：不追踪、不收集数据
 - 完全离线，不需要账号或后端服务
 
 ### iOS / iPadOS
@@ -45,6 +48,7 @@ SkyTrace 是一个完全离线的原生星图浏览应用，支持 iPhone、iPad
 - 鼠标、滚轮、触控板缩放/平移/旋转
 - 系统浅色/深色外观；星空画布保持深色
 - 收藏目录、观测窗口和本地通知设置
+- 天空事件与观测日志侧栏
 
 ## 系统要求
 
@@ -90,6 +94,33 @@ xcodebuild \
   CODE_SIGNING_ALLOWED=NO \
   build
 ```
+
+## 真机安装
+
+Bundle ID：
+
+- iOS/iPadOS：`com.lyonzzzzzzzz.SkyTrace`
+- macOS：`com.lyonzzzzzzzz.SkyTrace.mac`
+
+真机步骤：
+
+1. 在 Xcode Settings > Accounts 登录 Apple ID。
+2. 用数据线连接 iPhone 或 iPad，并信任电脑。
+3. 打开 `SkyTrace.xcodeproj`，选择 `SkyTrace` Scheme 和连接设备。
+4. 在 Signing & Capabilities 选择个人 Team。
+5. 开启设备上的开发者模式，然后运行。
+
+仓库不保存个人 Development Team。免费 Apple ID 的安装通常需要每 7 天刷新一次。
+
+## 隐私
+
+iOS 与 macOS App 和 SkyTraceCore 均包含 `PrivacyInfo.xcprivacy`：
+
+- 不追踪用户
+- 不收集用户数据
+- UserDefaults 使用原因 `CA92.1`
+- 定位和通知仅在用户主动使用时请求
+- 观测日志保存在设备 Application Support 中，不上传服务器
 
 ## 测试
 

@@ -5,6 +5,25 @@ All notable changes to SkyTrace are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project follows [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-09-15
+
+### Added
+
+- Local observation log with rating, weather, equipment and notes
+- Application Support JSON storage with atomic writes and corruption recovery
+- Offline 120-day astronomy event planning
+- Moon quarters, lunar eclipses, local solar eclipses, planet conjunctions and seasons
+- Unified observatory center with Tonight, Events and Logs sections
+- macOS event and observation-log sidebar sections
+- Privacy manifests for app targets and SkyTraceCore
+- Debug Logger and Signpost instrumentation
+
+### Changed
+
+- Bundle IDs updated to `com.lyonzzzzzzzz.SkyTrace` and `.mac`
+- App version updated to 1.2.0 (build 3)
+- Observation planning and astronomy events run asynchronously and cache recent results
+
 ## [1.1.0] - 2026-09-15
 
 ### Added

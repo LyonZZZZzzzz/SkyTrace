@@ -23,6 +23,40 @@ struct MacSidebarView: View {
                 }
             }
 
+            if !viewModel.astronomyEvents.isEmpty {
+                Section("天空事件") {
+                    ForEach(viewModel.astronomyEvents.prefix(8).map { $0 }) { event in
+                        Button {
+                            viewModel.focus(on: event)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(event.title)
+                                    .font(.body.weight(.semibold))
+                                Text(event.date, style: .date)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            if !viewModel.observationLogs.isEmpty {
+                Section("观测日志") {
+                    ForEach(viewModel.observationLogs.prefix(8).map { $0 }) { log in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(log.objectName)
+                                .font(.body.weight(.semibold))
+                            Text("\(log.observedAt.formatted(date: .abbreviated, time: .shortened)) · \(log.rating) 星")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+
             Section("太阳系") {
                 ForEach(solarSystemObjects) { object in
                     objectRow(object)

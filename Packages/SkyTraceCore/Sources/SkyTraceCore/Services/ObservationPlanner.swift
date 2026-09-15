@@ -33,6 +33,8 @@ public actor ObservationPlanner: ObservationPlanning {
         favoriteIDs: Set<String>,
         minimumAltitude: Double = 10
     ) async -> ObservationPlan {
+        SkyTraceDiagnostics.planning.info("Building observation plan")
+        defer { SkyTraceDiagnostics.event("ObservationPlanCompleted") }
         let night = observationNight(for: moment, observer: observer)
         let moon = moonObservation(for: night, moment: moment, observer: observer)
 

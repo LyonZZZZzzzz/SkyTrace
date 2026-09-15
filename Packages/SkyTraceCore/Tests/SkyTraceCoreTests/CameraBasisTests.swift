@@ -97,6 +97,24 @@ final class CameraBasisTests: XCTestCase {
         }
     }
 
+    func testBasisRoundTripsThroughDisplayableCameraState() {
+        let states = [
+            SkyCameraState(azimuth: 0, altitude: 35, roll: 0, fieldOfView: 70),
+            SkyCameraState(azimuth: 137, altitude: 42, roll: 23, fieldOfView: 65),
+            SkyCameraState(azimuth: 270, altitude: 90, roll: 180, fieldOfView: 70),
+            SkyCameraState(azimuth: 45, altitude: -90, roll: 315, fieldOfView: 70)
+        ]
+
+        for state in states {
+            let basis = state.basis
+            let reconstructed = SkyCameraState(basis: basis, fieldOfView: state.fieldOfView)
+            let rebuilt = reconstructed.basis
+            XCTAssertLessThan(vectorAngle(basis.forward, rebuilt.forward), 0.001)
+            XCTAssertLessThan(vectorAngle(basis.right, rebuilt.right), 0.001)
+            XCTAssertLessThan(vectorAngle(basis.up, rebuilt.up), 0.001)
+        }
+    }
+
     func testProjectionUsesSameCameraBasis() {
         let state = SkyCameraState(azimuth: 90, altitude: 35, roll: 17, fieldOfView: 60)
         let projection = SkyProjection(camera: state, size: CGSize(width: 1200, height: 800))
@@ -104,6 +122,11 @@ final class CameraBasisTests: XCTestCase {
 
         XCTAssertEqual(point?.x ?? -1, 600, accuracy: 0.1)
         XCTAssertEqual(point?.y ?? -1, 400, accuracy: 0.1)
+    }
+
+    private func vectorAngle(_ lhs: Vector3D, _ rhs: Vector3D) -> Double {
+        let cosine = max(-1, min(1, Vector3D.dot(lhs.normalized, rhs.normalized)))
+        return acos(cosine) * 180 / .pi
     }
 
     private func angle(_ lhs: SIMD3<Float>, _ rhs: Vector3D) -> Float {

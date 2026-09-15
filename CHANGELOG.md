@@ -5,6 +5,18 @@ All notable changes to SkyTrace are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Reworked camera interaction around quaternion orientation with damped following and release inertia
+- Horizontal and vertical dragging can now cross the zenith and nadir continuously without hard altitude limits
+
+### Fixed
+
+- Removed the 45-degree camera roll jump caused by switching reference axes near 84.268 degrees altitude
+- Kept SceneKit rendering, SpriteKit labels and picking aligned with the same current quaternion camera basis
+
 ## [1.2.1] - 2026-09-15
 
 ### Changed

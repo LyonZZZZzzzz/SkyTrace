@@ -301,17 +301,34 @@ public struct SkyCameraBasis: Equatable, Sendable {
     }
 
     public init(camera: SkyCameraState) {
-        let worldUp = Vector3D(x: 0, y: 1, z: 0)
         let forward = camera.direction.normalized
-        let referenceUp = abs(Vector3D.dot(forward, worldUp)) > 0.995
-            ? Vector3D(x: 0, y: 0, z: 1)
-            : worldUp
-        let basisRight = Vector3D.cross(forward, referenceUp).normalized
+        let azimuth = camera.azimuth * .pi / 180
+        let basisRight = Vector3D(
+            x: cos(azimuth),
+            y: 0,
+            z: sin(azimuth)
+        ).normalized
         let basisUp = Vector3D.cross(basisRight, forward).normalized
         let roll = camera.roll * .pi / 180
         let right = (basisRight * cos(roll) + basisUp * sin(roll)).normalized
         let up = (basisUp * cos(roll) - basisRight * sin(roll)).normalized
         self.init(forward: forward, right: right, up: up)
+    }
+
+    public init(orientation: simd_quatf) {
+        let quaternion = simd_normalize(orientation)
+        let forward = quaternion.act(SIMD3<Float>(0, 0, -1))
+        let right = quaternion.act(SIMD3<Float>(1, 0, 0))
+        let up = quaternion.act(SIMD3<Float>(0, 1, 0))
+        self.init(
+            forward: Vector3D(x: Double(forward.x), y: Double(forward.y), z: Double(forward.z)),
+            right: Vector3D(x: Double(right.x), y: Double(right.y), z: Double(right.z)),
+            up: Vector3D(x: Double(up.x), y: Double(up.y), z: Double(up.z))
+        )
+    }
+
+    public var orientationQuaternion: simd_quatf {
+        simd_normalize(simd_quatf(orientationMatrix))
     }
 
     public var orientationMatrix: simd_float3x3 {
@@ -334,6 +351,41 @@ public struct SkyCameraState: Equatable, Sendable {
         self.altitude = altitude
         self.roll = roll
         self.fieldOfView = fieldOfView
+    }
+
+    public init(basis: SkyCameraBasis, fieldOfView: Double) {
+        let forward = basis.forward.normalized
+        let altitude = asin(min(1, max(-1, forward.y))) * 180 / .pi
+        let azimuth: Double
+        if abs(forward.x) < 0.000_000_1, abs(forward.z) < 0.000_000_1 {
+            azimuth = 0
+        } else {
+            azimuth = Self.normalizedDegrees(atan2(forward.x, -forward.z) * 180 / .pi)
+        }
+
+        let azimuthRadians = azimuth * .pi / 180
+        let canonicalRight = Vector3D(
+            x: cos(azimuthRadians),
+            y: 0,
+            z: sin(azimuthRadians)
+        ).normalized
+        let canonicalUp = Vector3D.cross(canonicalRight, forward).normalized
+        let roll = atan2(
+            Vector3D.dot(basis.right, canonicalUp),
+            Vector3D.dot(basis.right, canonicalRight)
+        ) * 180 / .pi
+
+        self.init(
+            azimuth: azimuth,
+            altitude: altitude,
+            roll: Self.normalizedDegrees(roll),
+            fieldOfView: fieldOfView
+        )
+    }
+
+    public static func normalizedDegrees(_ value: Double) -> Double {
+        let result = value.truncatingRemainder(dividingBy: 360)
+        return result < 0 ? result + 360 : result
     }
 
     public var basis: SkyCameraBasis {

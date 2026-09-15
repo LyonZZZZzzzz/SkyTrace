@@ -19,6 +19,21 @@ final class SkyTraceUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["金星"].waitForExistence(timeout: 3))
     }
 
+    func testStarMapPanSmoke() {
+        let app = launchApp()
+        let window = app.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 8))
+
+        let start = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.58))
+        let upward = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.34))
+        start.press(forDuration: 0.1, thenDragTo: upward)
+
+        let downward = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.72))
+        upward.press(forDuration: 0.1, thenDragTo: downward)
+
+        XCTAssertTrue(app.buttons["搜索天体"].exists)
+    }
+
     func testOpenObservationPlan() {
         let app = launchApp()
         let planButton = app.buttons["今晚观测计划"]

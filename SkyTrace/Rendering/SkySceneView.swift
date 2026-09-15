@@ -39,16 +39,13 @@ struct SkySceneView: UIViewRepresentable {
     final class Coordinator: NSObject {
         var parent: SkySceneView
         var controller: SkySceneController!
-        private var panStartCamera = SkyCameraState()
-        private var pinchStartFieldOfView = 70.0
-        private var rotationStartRoll = 0.0
+        private var lastPanTranslation = CGPoint.zero
+        private var lastPinchScale = 1.0
+        private var lastRotation = 0.0
 
         init(parent: SkySceneView) {
             self.parent = parent
             controller = SkySceneController(catalog: parent.catalog)
-            panStartCamera = parent.camera
-            pinchStartFieldOfView = parent.camera.fieldOfView
-            rotationStartRoll = parent.camera.roll
         }
 
         func update() {
@@ -64,16 +61,12 @@ struct SkySceneView: UIViewRepresentable {
             controller.setMotionReading(
                 parent.motionEnabled && !controller.isUserInteracting ? parent.motionReading : nil
             )
-            if !controller.isUserInteracting {
-                controller.updateCamera(parent.camera, selectedObjectID: parent.selectedObjectID, notify: false)
-            } else {
-                controller.updateCamera(
-                    controller.currentCameraState,
-                    selectedObjectID: parent.selectedObjectID,
-                    notify: false
-                )
-            }
+            controller.synchronizeCamera(
+                parent.camera,
+                selectedObjectID: parent.selectedObjectID
+            )
             controller.onCameraChange = parent.onCameraChange
+            controller.onCameraSettled = parent.onCameraChange
         }
 
         func installGestures(on view: SCNView) {
@@ -101,52 +94,88 @@ struct SkySceneView: UIViewRepresentable {
             switch gesture.state {
             case .began:
                 controller.setMotionReading(nil)
-                controller.isUserInteracting = true
-                panStartCamera = controller.currentCameraState
+                controller.beginCameraInteraction()
+                lastPanTranslation = .zero
             case .changed:
                 let translation = gesture.translation(in: view)
-                var state = panStartCamera
-                let horizontalScale = state.fieldOfView / max(Double(view.bounds.width), 1)
-                let verticalScale = state.fieldOfView / max(Double(view.bounds.height), 1)
-                state.azimuth = Self.normalizedDegrees(state.azimuth - Double(translation.x) * horizontalScale)
-                state.altitude = min(89, max(-89, state.altitude + Double(translation.y) * verticalScale))
-                controller.updateCamera(state, selectedObjectID: parent.selectedObjectID, notify: false)
-            case .ended, .cancelled, .failed:
-                finishInteraction()
+                let delta = CGPoint(
+                    x: translation.x - lastPanTranslation.x,
+                    y: translation.y - lastPanTranslation.y
+                )
+                lastPanTranslation = translation
+                controller.orbit(
+                    horizontalDelta: Double(delta.x),
+                    verticalDelta: Double(delta.y),
+                    viewportSize: view.bounds.size,
+                    notify: false
+                )
+            case .ended:
+                let velocity = gesture.velocity(in: view)
+                controller.endCameraInteraction(
+                    horizontalVelocity: Double(velocity.x),
+                    verticalVelocity: Double(velocity.y),
+                    rollVelocity: 0,
+                    viewportSize: view.bounds.size
+                )
+            case .cancelled, .failed:
+                controller.endCameraInteraction(
+                    horizontalVelocity: 0,
+                    verticalVelocity: 0,
+                    rollVelocity: 0,
+                    viewportSize: view.bounds.size
+                )
             default:
                 break
             }
         }
 
         @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
+            guard let view = gesture.view else { return }
             switch gesture.state {
             case .began:
                 controller.setMotionReading(nil)
-                controller.isUserInteracting = true
-                pinchStartFieldOfView = controller.currentCameraState.fieldOfView
+                controller.beginCameraInteraction()
+                lastPinchScale = 1
             case .changed:
-                var state = controller.currentCameraState
-                state.fieldOfView = min(110, max(20, pinchStartFieldOfView / Double(gesture.scale)))
-                controller.updateCamera(state, selectedObjectID: parent.selectedObjectID, notify: false)
+                let ratio = Double(gesture.scale / max(lastPinchScale, 0.001))
+                lastPinchScale = gesture.scale
+                controller.zoom(by: ratio, notify: false)
             case .ended, .cancelled, .failed:
-                finishInteraction()
+                controller.endCameraInteraction(
+                    horizontalVelocity: 0,
+                    verticalVelocity: 0,
+                    rollVelocity: 0,
+                    viewportSize: view.bounds.size
+                )
             default:
                 break
             }
         }
 
         @objc private func handleRotation(_ gesture: UIRotationGestureRecognizer) {
+            guard let view = gesture.view else { return }
             switch gesture.state {
             case .began:
                 controller.setMotionReading(nil)
-                controller.isUserInteracting = true
-                rotationStartRoll = controller.currentCameraState.roll
+                controller.beginCameraInteraction()
+                lastRotation = 0
             case .changed:
-                var state = controller.currentCameraState
-                state.roll = Self.normalizedDegrees(rotationStartRoll + Double(gesture.rotation) * 180 / .pi)
-                controller.updateCamera(state, selectedObjectID: parent.selectedObjectID, notify: false)
+                let delta = gesture.rotation - lastRotation
+                lastRotation = gesture.rotation
+                controller.rotate(
+                    by: Double(delta) * 180 / .pi,
+                    notify: false
+                )
             case .ended, .cancelled, .failed:
-                finishInteraction()
+                let rollVelocity = gesture.state == .ended
+                    ? Double(gesture.velocity) * 180 / .pi
+                    : 0
+                controller.endCameraInteraction(
+                    horizontalVelocity: 0,
+                    verticalVelocity: 0,
+                    rollVelocity: rollVelocity,
+                    viewportSize: view.bounds.size
+                )
             default:
                 break
             }
@@ -159,16 +188,6 @@ struct SkySceneView: UIViewRepresentable {
 
         @objc private func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
             parent.onReset()
-        }
-
-        private func finishInteraction() {
-            controller.isUserInteracting = false
-            parent.onCameraChange(controller.currentCameraState)
-        }
-
-        private static func normalizedDegrees(_ value: Double) -> Double {
-            let result = value.truncatingRemainder(dividingBy: 360)
-            return result < 0 ? result + 360 : result
         }
     }
 }

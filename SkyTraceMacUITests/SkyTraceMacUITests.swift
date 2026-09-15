@@ -6,6 +6,25 @@ final class SkyTraceMacUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    func testStarMapDragSmoke() {
+        let app = XCUIApplication()
+        app.launch()
+
+        let window = app.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 10))
+        app.activate()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 5))
+
+        let start = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.58))
+        let upward = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.32))
+        start.press(forDuration: 0.1, thenDragTo: upward)
+
+        let downward = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.74))
+        upward.press(forDuration: 0.1, thenDragTo: downward)
+
+        XCTAssertTrue(app.buttons["今晚可见"].exists)
+    }
+
     func testLaunchAndOpenSearch() {
         let app = XCUIApplication()
         app.launch()

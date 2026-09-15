@@ -19,8 +19,10 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     public private(set) var metrics = SkyFrameMetrics()
     public private(set) var staticGeometryRebuildCount = 0
     public var onCameraChange: ((SkyCameraState) -> Void)?
+    public var onCameraSettled: ((SkyCameraState) -> Void)?
     public var isUserInteracting = false
-    public var currentCameraState: SkyCameraState { cameraState }
+    public var isCameraMoving: Bool { cameraMotion.isMoving }
+    public var currentCameraState: SkyCameraState { cameraMotion.state }
 
     private let catalog: SkySceneCatalog?
     private let astronomy: any AstronomyCalculating
@@ -50,13 +52,15 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     private var hasBuiltStaticGeometry = false
     private var staticGeometryScale: CGFloat?
     private var geometryKey: GeometryKey?
-    private var cameraState = SkyCameraState()
+    private var cameraMotion = SkyCameraMotionController()
+    private var wasCameraMoving = false
     private var selectedObjectID: String?
     private var labelMagnitudeLimit = 2.8
     private var showCardinals = true
     private var labelSources: [LabelSource] = []
     private var labelSourceKey: LabelSourceKey?
     private var motionTarget: SkyMotionReading?
+    private var lastPublishedCameraState: SkyCameraState?
     private var debugFrameCounter = 0
     private nonisolated let frameUpdateLock = OSAllocatedUnfairLock(initialState: false)
 
@@ -128,6 +132,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         sceneView.overlaySKScene = labelOverlayScene
         sceneView.delegate = self
         updateCamera(SkyCameraState(), selectedObjectID: nil, notify: false)
+        lastPublishedCameraState = currentCameraState
     }
 
     public func update(
@@ -190,21 +195,76 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     public func updateCamera(
         _ state: SkyCameraState,
         selectedObjectID: String?,
-        notify: Bool = true
+        notify: Bool = true,
+        immediate: Bool = true
     ) {
-        cameraState = state
         self.selectedObjectID = selectedObjectID
-        cameraNode.simdOrientation = simd_quatf(state.basis.orientationMatrix)
-        camera.fieldOfView = CGFloat(state.fieldOfView)
-        updateSelection()
+        if immediate {
+            cameraMotion.setImmediate(state)
+            applyCameraMotionSnapshot(
+                SkyCameraMotionSnapshot(
+                    orientation: cameraMotion.orientation,
+                    basis: cameraMotion.basis,
+                    state: cameraMotion.state,
+                    isMoving: false
+                ),
+                publishSettled: false
+            )
+        } else {
+            cameraMotion.animate(to: state)
+        }
         updateLabelSourcesIfNeeded()
         if notify {
-            onCameraChange?(state)
+            lastPublishedCameraState = currentCameraState
+            onCameraChange?(currentCameraState)
+        }
+    }
+
+    public func synchronizeCamera(_ state: SkyCameraState, selectedObjectID: String?) {
+        self.selectedObjectID = selectedObjectID
+        if isUserInteracting {
+            return
+        }
+        if let lastPublishedCameraState,
+           Self.cameraStatesAreApproximatelyEqual(state, lastPublishedCameraState) {
+            return
+        }
+        cameraMotion.animate(to: state)
+        updateLabelSourcesIfNeeded()
+    }
+
+    public func beginCameraInteraction() {
+        isUserInteracting = true
+        cameraMotion.beginInteraction()
+    }
+
+    public func endCameraInteraction(
+        horizontalVelocity: Double,
+        verticalVelocity: Double,
+        rollVelocity: Double,
+        viewportSize: CGSize
+    ) {
+        let horizontalScale = currentCameraState.fieldOfView / max(Double(viewportSize.width), 1)
+        let verticalScale = currentCameraState.fieldOfView / max(Double(viewportSize.height), 1)
+        isUserInteracting = false
+        cameraMotion.endInteraction(
+            horizontalVelocity: horizontalVelocity * horizontalScale,
+            verticalVelocity: verticalVelocity * verticalScale,
+            rollVelocity: rollVelocity
+        )
+        if !cameraMotion.isMoving {
+            let state = currentCameraState
+            lastPublishedCameraState = state
+            onCameraSettled?(state)
         }
     }
 
     public func pick(at point: CGPoint, in size: CGSize) -> String? {
-        let projection = SkyProjection(camera: cameraState, size: size)
+        let projection = SkyProjection(
+            camera: currentCameraState,
+            basis: cameraMotion.basis,
+            size: size
+        )
         let objects = catalog?.objects ?? targetSnapshot.positions.map(\.object)
         return objects.compactMap { object -> (String, CGFloat)? in
             guard let direction = displayVector(for: object.id) else { return nil }
@@ -222,34 +282,44 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         viewportSize: CGSize,
         notify: Bool = true
     ) {
-        let horizontalScale = cameraState.fieldOfView / max(Double(viewportSize.width), 1)
-        let verticalScale = cameraState.fieldOfView / max(Double(viewportSize.height), 1)
-        var state = cameraState
-        state.azimuth = Self.normalizedDegrees(state.azimuth - horizontalDelta * horizontalScale)
-        state.altitude = min(89, max(-89, state.altitude + verticalDelta * verticalScale))
-        updateCamera(state, selectedObjectID: selectedObjectID, notify: notify)
+        let horizontalScale = currentCameraState.fieldOfView / max(Double(viewportSize.width), 1)
+        let verticalScale = currentCameraState.fieldOfView / max(Double(viewportSize.height), 1)
+        cameraMotion.rotate(
+            horizontalDegrees: horizontalDelta * horizontalScale,
+            verticalDegrees: verticalDelta * verticalScale,
+            rollDegrees: 0
+        )
+        if notify {
+            onCameraChange?(currentCameraState)
+        }
     }
 
     public func zoom(by scale: Double, notify: Bool = true) {
-        var state = cameraState
-        state.fieldOfView = min(110, max(20, state.fieldOfView / max(scale, 0.05)))
-        updateCamera(state, selectedObjectID: selectedObjectID, notify: notify)
+        cameraMotion.zoom(by: scale)
+        if notify {
+            onCameraChange?(currentCameraState)
+        }
     }
 
     public func rotate(by degrees: Double, notify: Bool = true) {
-        var state = cameraState
-        state.roll = Self.normalizedDegrees(state.roll + degrees)
-        updateCamera(state, selectedObjectID: selectedObjectID, notify: notify)
+        cameraMotion.rotate(horizontalDegrees: 0, verticalDegrees: 0, rollDegrees: degrees)
+        if notify {
+            onCameraChange?(currentCameraState)
+        }
     }
 
     public func nudge(horizontal: Double = 0, vertical: Double = 0, zoom: Double = 0, notify: Bool = true) {
-        var state = cameraState
-        state.azimuth = Self.normalizedDegrees(state.azimuth + horizontal)
-        state.altitude = min(89, max(-89, state.altitude + vertical))
+        cameraMotion.rotate(
+            horizontalDegrees: -horizontal,
+            verticalDegrees: vertical,
+            rollDegrees: 0
+        )
         if zoom != 0 {
-            state.fieldOfView = min(110, max(20, state.fieldOfView + zoom))
+            cameraMotion.zoom(by: pow(1.08, -zoom / 5))
         }
-        updateCamera(state, selectedObjectID: selectedObjectID, notify: notify)
+        if notify {
+            onCameraChange?(currentCameraState)
+        }
     }
 
     public func setMotionReading(_ reading: SkyMotionReading?) {
@@ -262,6 +332,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
 
     var debugCelestialRootNode: SCNNode { celestialRootNode }
     var debugCurrentSceneMatrix: simd_float3x3 { currentSceneMatrix }
+    var debugCurrentCameraBasis: SkyCameraBasis { cameraMotion.basis }
     var debugCurrentDynamicVectors: [String: Vector3D] { currentDynamicVectors }
     var debugTransitionStartTime: TimeInterval { transitionStartTime }
     var debugTransitionDuration: TimeInterval { transitionDuration }
@@ -306,6 +377,20 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
             SkyTraceDiagnostics.event("FrameMetricsReport")
         }
 #endif
+    }
+
+    private func applyCameraMotionSnapshot(
+        _ snapshot: SkyCameraMotionSnapshot,
+        publishSettled: Bool
+    ) {
+        cameraNode.simdOrientation = snapshot.orientation
+        camera.fieldOfView = CGFloat(snapshot.state.fieldOfView)
+
+        if publishSettled, wasCameraMoving, !snapshot.isMoving {
+            lastPublishedCameraState = snapshot.state
+            onCameraSettled?(snapshot.state)
+        }
+        wasCameraMoving = snapshot.isMoving
     }
 
     private func buildStaticGeometry(catalog: SkySceneCatalog, scale: CGFloat) {
@@ -356,15 +441,15 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
 
     private func updateAnimation(at time: TimeInterval) {
         if let motionTarget, !isUserInteracting {
-            var state = cameraState
-            let azimuthDelta = Self.shortestAngleDelta(from: state.azimuth, to: motionTarget.azimuth)
-            let rollDelta = Self.shortestAngleDelta(from: state.roll, to: motionTarget.roll)
-            let smoothing = 0.28
-            state.azimuth = Self.normalizedDegrees(state.azimuth + azimuthDelta * smoothing)
-            state.altitude += (motionTarget.altitude - state.altitude) * smoothing
-            state.roll = Self.normalizedDegrees(state.roll + rollDelta * smoothing)
-            updateCamera(state, selectedObjectID: selectedObjectID, notify: false)
+            var target = currentCameraState
+            target.azimuth = motionTarget.azimuth
+            target.altitude = motionTarget.altitude
+            target.roll = motionTarget.roll
+            cameraMotion.animate(to: target)
         }
+
+        let cameraSnapshot = cameraMotion.update(at: time)
+        applyCameraMotionSnapshot(cameraSnapshot, publishSettled: true)
 
         let progress: Float
         if transitionDuration > 0 {
@@ -560,7 +645,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         }
 
         let cardinalCount = visuals.count
-        let forward = cameraState.basis.forward
+        let forward = cameraMotion.basis.forward
         for source in labelSources {
             guard visuals.count < 100 + cardinalCount else { break }
             guard let direction = displayVector(for: source.object.id) else { continue }
@@ -633,6 +718,16 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     private static func normalizedDegrees(_ value: Double) -> Double {
         let result = value.truncatingRemainder(dividingBy: 360)
         return result < 0 ? result + 360 : result
+    }
+
+    private static func cameraStatesAreApproximatelyEqual(
+        _ lhs: SkyCameraState,
+        _ rhs: SkyCameraState
+    ) -> Bool {
+        abs(shortestAngleDelta(from: lhs.azimuth, to: rhs.azimuth)) < 0.05 &&
+            abs(lhs.altitude - rhs.altitude) < 0.05 &&
+            abs(shortestAngleDelta(from: lhs.roll, to: rhs.roll)) < 0.05 &&
+            abs(lhs.fieldOfView - rhs.fieldOfView) < 0.05
     }
 
     private static func shortestAngleDelta(from start: Double, to end: Double) -> Double {

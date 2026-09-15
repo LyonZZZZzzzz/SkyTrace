@@ -4,15 +4,21 @@ import Foundation
 public struct SkyProjection: Sendable {
     public let camera: SkyCameraState
     public let size: CGSize
+    private let cameraBasis: SkyCameraBasis
 
-    public init(camera: SkyCameraState, size: CGSize) {
+    public init(
+        camera: SkyCameraState,
+        basis: SkyCameraBasis? = nil,
+        size: CGSize
+    ) {
         self.camera = camera
+        self.cameraBasis = basis ?? camera.basis
         self.size = size
     }
 
     public func screenPoint(for direction: Vector3D) -> CGPoint? {
         let target = direction.normalized
-        let basis = camera.basis
+        let basis = cameraBasis
         let forward = basis.forward
         let right = basis.right
         let up = basis.up

@@ -72,6 +72,17 @@
       "problemMatcher": []
     },
     {
+      "label": "SkyTrace: Publish Current macOS App",
+      "type": "shell",
+      "command": "${workspaceFolder}/Scripts/publish_local_macos_app.sh",
+      "args": [
+        "${workspaceFolder}/build/Build/Products/Debug/SkyTrace.app",
+        "--replace"
+      ],
+      "dependsOn": "SkyTrace: Build macOS",
+      "problemMatcher": []
+    },
+    {
       "label": "SkyTrace: Run macOS",
       "type": "shell",
       "command": "open",

@@ -189,3 +189,14 @@ xcodebuild \
 - macOS 侧栏增加事件和日志内容，检查器可快速记录观测。
 - 新增隐私清单构建验证、日志仓库测试和离线事件计划测试。
 - 版本更新为 1.2.0（build 3）。
+
+## 17. v1.2.1 60 FPS 与本地版本化 App
+
+- 将恒星、深空天体和星座线改为静态 J2000 场景，时间与地点变化只旋转根节点。
+- 新增后台快照 worker、latest-wins 请求代次和 60 Hz 渲染插值。
+- 标签迁移到固定大小的 SpriteKit overlay，删除 SwiftUI 全量投影层。
+- 新增帧指标、慢帧统计和 Debug Signpost。
+- 修复 SceneKit 私有渲染队列上的主线程隔离崩溃。
+- 工程版本更新为 1.2.1（build 4）。
+- 新增 `Scripts/publish_local_macos_app.sh`，将构建产物发布为带版本号的本地 App。
+- 本地归档为 `SkyTrace-1.2.0.app` 和 `SkyTrace-1.2.1.app`。

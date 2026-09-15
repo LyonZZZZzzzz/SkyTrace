@@ -312,6 +312,20 @@ xcodebuild \
   build
 ```
 
+### 本地版本化 macOS App
+
+将当前 Debug 构建发布为 `~/Applications/SkyTrace/SkyTrace-<版本>.app`：
+
+```bash
+Scripts/publish_local_macos_app.sh \
+  build/Build/Products/Debug/SkyTrace.app \
+  --replace
+```
+
+脚本会从 `Info.plist` 读取版本号和 build 号，验证 Bundle ID，只修改副本的
+`CFBundleDisplayName`，随后重新执行 ad-hoc 签名并校验。目标已存在时必须显式传入
+`--replace`。不同版本保留相同 Bundle ID，因此同一时间只应运行一个版本。
+
 ## 15. 测试
 
 Core：

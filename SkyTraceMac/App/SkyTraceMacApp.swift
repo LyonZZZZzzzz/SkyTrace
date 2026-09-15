@@ -3,7 +3,12 @@ import SwiftUI
 
 @main
 struct SkyTraceMacApp: App {
-    @State private var viewModel = SkyViewModel()
+    @State private var viewModel = SkyViewModel(
+        locationService: CoreLocationService(),
+        motionService: NoopDeviceMotionProvider(),
+        astronomy: AstronomyService(),
+        reminderScheduler: UserNotificationScheduler()
+    )
     @State private var uiState = MacUIState()
 
     var body: some Scene {
@@ -19,7 +24,7 @@ struct SkyTraceMacApp: App {
         }
 
         Settings {
-            MacSettingsView(uiState: uiState)
+            MacSettingsView(viewModel: viewModel, uiState: uiState)
         }
     }
 }

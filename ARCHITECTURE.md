@@ -33,6 +33,8 @@ Contains:
 - Constellation and Messier resources
 - CoreLocation abstraction
 - Astronomy calculations
+- Observation planning and visibility windows
+- Favorites and local notification scheduling
 - SkyViewModel
 - Camera state and projection
 - Shared SceneKit scene controller

@@ -5,11 +5,33 @@ public struct ObjectDetailsContent: View {
     public let object: CelestialObject
     public let position: SkyPosition?
     public var compact: Bool
+    public var visibility: ObservationVisibility?
+    public var timeZone: TimeZone
+    public var isFavorite: Bool
+    public var isReminderEnabled: Bool
+    public var onToggleFavorite: (() -> Void)?
+    public var onToggleReminder: (() -> Void)?
 
-    public init(object: CelestialObject, position: SkyPosition?, compact: Bool = false) {
+    public init(
+        object: CelestialObject,
+        position: SkyPosition?,
+        compact: Bool = false,
+        visibility: ObservationVisibility? = nil,
+        timeZone: TimeZone = .current,
+        isFavorite: Bool = false,
+        isReminderEnabled: Bool = false,
+        onToggleFavorite: (() -> Void)? = nil,
+        onToggleReminder: (() -> Void)? = nil
+    ) {
         self.object = object
         self.position = position
         self.compact = compact
+        self.visibility = visibility
+        self.timeZone = timeZone
+        self.isFavorite = isFavorite
+        self.isReminderEnabled = isReminderEnabled
+        self.onToggleFavorite = onToggleFavorite
+        self.onToggleReminder = onToggleReminder
     }
 
     public var body: some View {
@@ -27,6 +49,26 @@ public struct ObjectDetailsContent: View {
                     Text(object.englishName.isEmpty ? object.kind.localizedName : object.englishName)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                }
+            }
+
+            if onToggleFavorite != nil || onToggleReminder != nil {
+                HStack(spacing: 10) {
+                    if let onToggleFavorite {
+                        Button(action: onToggleFavorite) {
+                            Label(isFavorite ? "已收藏" : "收藏", systemImage: isFavorite ? "star.fill" : "star")
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(isFavorite ? .skyOrange : .skyCyan)
+                    }
+                    if let onToggleReminder {
+                        Button(action: onToggleReminder) {
+                            Label(isReminderEnabled ? "提醒已开启" : "最佳时刻提醒", systemImage: isReminderEnabled ? "bell.fill" : "bell")
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(isReminderEnabled ? .skyMint : .skyCyan)
+                    }
+                    Spacer()
                 }
             }
 
@@ -52,6 +94,14 @@ public struct ObjectDetailsContent: View {
                 detailRow("当前方位", position?.azimuthText ?? "—")
                 Divider()
                 detailRow("当前高度", position?.altitudeText ?? "—")
+                if let visibility {
+                    Divider()
+                    detailRow("最佳时刻", formattedTime(visibility.bestTime))
+                    Divider()
+                    detailRow("观测时长", visibility.durationText)
+                    Divider()
+                    detailRow("最佳说明", visibility.reason.localizedText)
+                }
                 if object.kind != .sun, object.kind != .moon, object.kind != .planet {
                     Divider()
                     detailRow("赤经", String(format: "%.2f°", object.raDegrees))
@@ -62,6 +112,14 @@ public struct ObjectDetailsContent: View {
             .padding(.horizontal, 14)
             .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 18))
         }
+    }
+
+    private func formattedTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_Hans_CN")
+        formatter.timeZone = timeZone
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
     }
 
     private func detailRow(_ title: String, _ value: String) -> some View {

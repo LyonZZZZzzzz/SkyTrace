@@ -30,6 +30,11 @@ public final class SkyViewModel {
     public private(set) var locationAuthorization: SkyLocationAuthorizationStatus = .notDetermined
     public private(set) var locationErrorMessage: String?
 
+    public private(set) var observationPlan: ObservationPlan?
+    public private(set) var observationPlanState: ObservationPlanState = .idle
+    public private(set) var reminderAuthorization: ObservationNotificationAuthorization = .notDetermined
+    public var minimumObservationAltitude = 10.0
+
     public var motionEnabled = false {
         didSet {
             motionEnabled ? motionService.start() : motionService.stop()
@@ -38,9 +43,13 @@ public final class SkyViewModel {
 
     @ObservationIgnored public let locationService: any LocationProviding
     @ObservationIgnored public let motionService: any DeviceMotionProviding
+    @ObservationIgnored public let favoriteStore: FavoriteStore
+    @ObservationIgnored public let reminderScheduler: any ObservationReminderScheduling
     @ObservationIgnored private let astronomy: any AstronomyCalculating
+    @ObservationIgnored private let planner: any ObservationPlanning
     @ObservationIgnored private var playbackTask: Task<Void, Never>?
     @ObservationIgnored private var toastTask: Task<Void, Never>?
+    @ObservationIgnored private var planTask: Task<Void, Never>?
 
     public convenience init() {
         self.init(
@@ -63,11 +72,17 @@ public final class SkyViewModel {
         locationService: any LocationProviding,
         motionService: any DeviceMotionProviding,
         astronomy: any AstronomyCalculating,
-        catalog: (any SkyCatalogProviding)? = nil
+        catalog: (any SkyCatalogProviding)? = nil,
+        planner: (any ObservationPlanning)? = nil,
+        favoriteStore: FavoriteStore? = nil,
+        reminderScheduler: (any ObservationReminderScheduling)? = nil
     ) {
         self.locationService = locationService
         self.motionService = motionService
         self.astronomy = astronomy
+        self.planner = planner ?? ObservationPlanner(astronomy: astronomy)
+        self.favoriteStore = favoriteStore ?? FavoriteStore()
+        self.reminderScheduler = reminderScheduler ?? NoopObservationReminderScheduler()
         observer = Self.loadObserver() ?? .shanghai
         moment = .now
 
@@ -86,11 +101,21 @@ public final class SkyViewModel {
         }
 
         bindServices()
+        self.favoriteStore.removeUnknownFavorites(
+            validIDs: Set(repository?.allObjects.map(\.id) ?? [])
+        )
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.reminderScheduler.refreshAuthorizationStatus()
+            self.reminderAuthorization = self.reminderScheduler.authorizationStatus
+            self.scheduleObservationPlanRefresh()
+        }
     }
 
     deinit {
         playbackTask?.cancel()
         toastTask?.cancel()
+        planTask?.cancel()
     }
 
     public var cameraAzimuth: Double {
@@ -116,6 +141,95 @@ public final class SkyViewModel {
     public var selectedObject: CelestialObject? {
         guard let selectedObjectID else { return nil }
         return repository?.allObjects.first { $0.id == selectedObjectID }
+    }
+
+    public var favoriteObjects: [CelestialObject] {
+        let IDs = favoriteStore.favoriteIDs
+        return repository?.allObjects
+            .filter { IDs.contains($0.id) }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending } ?? []
+    }
+
+    public var favoriteIDs: Set<String> {
+        favoriteStore.favoriteIDs
+    }
+
+    public var visibilityByObjectID: [String: ObservationVisibility] {
+        let visibilities = (observationPlan?.recommendations ?? []) + (observationPlan?.favoriteVisibilities ?? [])
+        return Dictionary(visibilities.map { ($0.object.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    public func visibility(for objectID: String) -> ObservationVisibility? {
+        visibilityByObjectID[objectID]
+    }
+
+    public func isFavorite(_ objectID: String) -> Bool {
+        favoriteStore.isFavorite(objectID)
+    }
+
+    public func isReminderEnabled(_ objectID: String) -> Bool {
+        favoriteStore.isReminderEnabled(objectID)
+    }
+
+    public func toggleFavorite(_ object: CelestialObject) {
+        let enabled = favoriteStore.toggleFavorite(object.id)
+        if !enabled {
+            reminderScheduler.removeReminder(objectID: object.id)
+        }
+        scheduleObservationPlanRefresh()
+    }
+
+    public func toggleReminder(for object: CelestialObject) async {
+        if favoriteStore.isReminderEnabled(object.id) {
+            favoriteStore.setReminder(false, for: object.id)
+            reminderScheduler.removeReminder(objectID: object.id)
+            return
+        }
+
+        if !favoriteStore.isFavorite(object.id) {
+            favoriteStore.toggleFavorite(object.id)
+        }
+
+        if reminderScheduler.authorizationStatus == .notDetermined {
+            let granted = await reminderScheduler.requestAuthorization()
+            reminderAuthorization = reminderScheduler.authorizationStatus
+            if !granted {
+                showToast("通知权限未开启，收藏已保存，但不会发送提醒。")
+                return
+            }
+        }
+        guard reminderScheduler.authorizationStatus == .authorized || reminderScheduler.authorizationStatus == .provisional else {
+            reminderAuthorization = reminderScheduler.authorizationStatus
+            showToast("通知权限未开启，可在系统设置中允许。")
+            return
+        }
+
+        favoriteStore.remindersEnabled = true
+        favoriteStore.setReminder(true, for: object.id)
+        scheduleObservationPlanRefresh()
+    }
+
+    public func setRemindersEnabled(_ enabled: Bool) async {
+        guard enabled else {
+            favoriteStore.remindersEnabled = false
+            reminderScheduler.removeAllReminders()
+            return
+        }
+        if reminderScheduler.authorizationStatus == .notDetermined {
+            let granted = await reminderScheduler.requestAuthorization()
+            reminderAuthorization = reminderScheduler.authorizationStatus
+            guard granted else {
+                showToast("通知权限未开启，可在系统设置中允许。")
+                return
+            }
+        }
+        guard reminderScheduler.authorizationStatus == .authorized || reminderScheduler.authorizationStatus == .provisional else {
+            reminderAuthorization = reminderScheduler.authorizationStatus
+            showToast("通知权限未开启，可在系统设置中允许。")
+            return
+        }
+        favoriteStore.remindersEnabled = true
+        scheduleObservationPlanRefresh()
     }
 
     public var selectedPosition: SkyPosition? {
@@ -147,7 +261,7 @@ public final class SkyViewModel {
         return lower...upper
     }
 
-    public func refreshSnapshot() {
+    public func refreshSnapshot(updateObservationPlan: Bool = true) {
         guard let repository else { return }
         let transform = astronomy.horizontalTransform(for: moment, observer: observer)
 
@@ -226,6 +340,9 @@ public final class SkyViewModel {
             constellationSegments: segments,
             recommendations: recommendations
         )
+        if updateObservationPlan {
+            scheduleObservationPlanRefresh()
+        }
     }
 
     public func setDate(_ date: Date, recenter: Bool = false) {
@@ -331,6 +448,58 @@ public final class SkyViewModel {
         }
     }
 
+    private func scheduleObservationPlanRefresh() {
+        guard let repository else { return }
+        planTask?.cancel()
+        observationPlanState = .loading
+        let moment = moment
+        let observer = observer
+        let candidates = repository.allObjects
+        let favoriteIDs = favoriteStore.favoriteIDs
+        let minimumAltitude = minimumObservationAltitude
+        let planner = planner
+
+        planTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(250))
+                try Task.checkCancellation()
+                let plan = await planner.makePlan(
+                    for: moment,
+                    observer: observer,
+                    candidates: candidates,
+                    favoriteIDs: favoriteIDs,
+                    minimumAltitude: minimumAltitude
+                )
+                try Task.checkCancellation()
+                guard let self else { return }
+                self.observationPlan = plan
+                self.observationPlanState = .ready
+                await self.refreshScheduledReminders(for: plan)
+            } catch is CancellationError {
+                return
+            } catch {
+                self?.observationPlanState = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    private func refreshScheduledReminders(for plan: ObservationPlan) async {
+        reminderScheduler.removeAllReminders()
+        guard favoriteStore.remindersEnabled else { return }
+        let enabledIDs = favoriteStore.reminderIDs
+        for visibility in plan.favoriteVisibilities where enabledIDs.contains(visibility.object.id) {
+            do {
+                try await reminderScheduler.scheduleReminder(
+                    object: visibility.object,
+                    at: visibility.bestTime,
+                    observer: plan.observer
+                )
+            } catch {
+                showToast(error.localizedDescription)
+            }
+        }
+    }
+
     private func bindServices() {
         locationAuthorization = locationService.authorizationStatus
         locationErrorMessage = locationService.errorMessage
@@ -377,7 +546,7 @@ public final class SkyViewModel {
                 if self.moment.date > self.dateRange.upperBound {
                     self.moment = SkyMoment(date: self.dateRange.lowerBound)
                 }
-                self.refreshSnapshot()
+                self.refreshSnapshot(updateObservationPlan: false)
                 if let id = self.selectedObjectID {
                     self.center(on: id)
                 }
@@ -389,6 +558,7 @@ public final class SkyViewModel {
         playbackTask?.cancel()
         playbackTask = nil
         isPlaying = false
+        scheduleObservationPlanRefresh()
     }
 
     private func vector(azimuth: Double, altitude: Double) -> Vector3D {

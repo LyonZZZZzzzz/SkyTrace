@@ -25,6 +25,7 @@ struct SearchSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("关闭") { dismiss() }
+                        .accessibilityIdentifier("search.close")
                 }
             }
         }
@@ -60,13 +61,20 @@ struct SearchSheet: View {
     }
 
     private func resultRow(_ object: CelestialObject) -> some View {
-        Button {
-            viewModel.select(object)
-            dismiss()
-        } label: {
-            CelestialObjectRow(object: object)
+        HStack(spacing: 10) {
+            Button {
+                viewModel.select(object)
+                dismiss()
+            } label: {
+                CelestialObjectRow(object: object)
+            }
+            .buttonStyle(.plain)
+
+            FavoriteButton(
+                isFavorite: viewModel.isFavorite(object.id),
+                action: { viewModel.toggleFavorite(object) }
+            )
         }
-        .buttonStyle(.plain)
     }
 
 }

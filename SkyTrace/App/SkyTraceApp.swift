@@ -6,7 +6,8 @@ struct SkyTraceApp: App {
     @State private var viewModel = SkyViewModel(
         locationService: CoreLocationService(),
         motionService: MotionService(),
-        astronomy: AstronomyService()
+        astronomy: AstronomyService(),
+        reminderScheduler: UserNotificationScheduler()
     )
 
     var body: some Scene {

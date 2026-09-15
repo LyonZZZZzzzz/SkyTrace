@@ -51,6 +51,41 @@ public struct AstronomyEquatorialCoordinate: Equatable, Sendable {
     public let distanceAU: Double
 }
 
+
+public enum AstronomyDirection: Sendable {
+    case rising
+    case setting
+
+    fileprivate var cValue: astro_direction_t {
+        switch self {
+        case .rising: DIRECTION_RISE
+        case .setting: DIRECTION_SET
+        }
+    }
+}
+
+public struct AstronomyRiseSet: Equatable, Sendable {
+    public let rise: Date?
+    public let set: Date?
+
+    public init(rise: Date?, set: Date?) {
+        self.rise = rise
+        self.set = set
+    }
+}
+
+public struct AstronomyMoonInfo: Equatable, Sendable {
+    public let phaseAngle: Double
+    public let illuminationFraction: Double
+    public let magnitude: Double
+
+    public init(phaseAngle: Double, illuminationFraction: Double, magnitude: Double) {
+        self.phaseAngle = phaseAngle
+        self.illuminationFraction = illuminationFraction
+        self.magnitude = magnitude
+    }
+}
+
 /// A reusable J2000-to-horizontal matrix. Build it once per time/location update,
 /// then transform thousands of catalog stars without repeated ephemeris work.
 public struct HorizontalTransform: Sendable {
@@ -143,6 +178,88 @@ public enum AstronomyEngine {
     public static func moonPhase(date: Date) -> Double {
         let time = makeTime(date)
         return Astronomy_MoonPhase(time).angle
+    }
+
+    public static func moonInfo(date: Date) -> AstronomyMoonInfo {
+        let time = makeTime(date)
+        let result = Astronomy_Illumination(BODY_MOON, time)
+        return AstronomyMoonInfo(
+            phaseAngle: result.phase_angle,
+            illuminationFraction: result.phase_fraction,
+            magnitude: result.mag
+        )
+    }
+
+    public static func riseSet(
+        body: AstronomyBody,
+        startDate: Date,
+        latitude: Double,
+        longitude: Double,
+        height: Double = 0,
+        searchDays: Double = 2
+    ) -> AstronomyRiseSet {
+        let observer = Astronomy_MakeObserver(latitude, longitude, height)
+        let startTime = makeTime(startDate)
+        let riseResult = Astronomy_SearchRiseSetEx(
+            body.cValue,
+            observer,
+            DIRECTION_RISE,
+            startTime,
+            searchDays,
+            height
+        )
+        let setResult = Astronomy_SearchRiseSetEx(
+            body.cValue,
+            observer,
+            DIRECTION_SET,
+            startTime,
+            searchDays,
+            height
+        )
+        return AstronomyRiseSet(
+            rise: riseResult.status == ASTRO_SUCCESS ? date(from: riseResult.time) : nil,
+            set: setResult.status == ASTRO_SUCCESS ? date(from: setResult.time) : nil
+        )
+    }
+
+    public static func altitudeCrossing(
+        body: AstronomyBody,
+        direction: AstronomyDirection,
+        altitude: Double,
+        startDate: Date,
+        latitude: Double,
+        longitude: Double,
+        height: Double = 0,
+        searchDays: Double = 2
+    ) -> Date? {
+        let observer = Astronomy_MakeObserver(latitude, longitude, height)
+        let startTime = makeTime(startDate)
+        let result = Astronomy_SearchAltitude(
+            body.cValue,
+            observer,
+            direction.cValue,
+            startTime,
+            searchDays,
+            altitude
+        )
+        return result.status == ASTRO_SUCCESS ? date(from: result.time) : nil
+    }
+
+    private static func date(from time: astro_time_t) -> Date {
+        let utc = Astronomy_UtcFromTime(time)
+        let wholeSeconds = Int(utc.second.rounded(.down))
+        let nanoseconds = Int(((utc.second - Double(wholeSeconds)) * 1_000_000_000).rounded())
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar.date(from: DateComponents(
+            year: Int(utc.year),
+            month: Int(utc.month),
+            day: Int(utc.day),
+            hour: Int(utc.hour),
+            minute: Int(utc.minute),
+            second: wholeSeconds,
+            nanosecond: nanoseconds
+        )) ?? .distantPast
     }
 
     private static func makeTime(_ date: Date) -> astro_time_t {

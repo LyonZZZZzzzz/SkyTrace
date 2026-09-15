@@ -7,6 +7,7 @@ struct ContentView: View {
 
     @AppStorage("SkyTrace.DidShowOnboarding") private var didShowOnboarding = false
     @State private var showSearch = false
+    @State private var showFavorites = false
     @State private var showLocation = false
     @State private var showTonight = false
     @State private var showDetails = false
@@ -47,6 +48,12 @@ struct ContentView: View {
         .sheet(isPresented: $showSearch, onDismiss: presentSelectedDetailsIfNeeded) {
             SearchSheet(viewModel: viewModel)
         }
+        .sheet(isPresented: $showFavorites, onDismiss: presentSelectedDetailsIfNeeded) {
+            FavoritesSheet(viewModel: viewModel) { object in
+                viewModel.select(object)
+                showFavorites = false
+            }
+        }
         .sheet(isPresented: $showLocation) {
             LocationSheet(viewModel: viewModel)
         }
@@ -59,6 +66,7 @@ struct ContentView: View {
         .sheet(isPresented: $showDetails) {
             if let object = viewModel.selectedObject {
                 DetailsSheet(
+                    viewModel: viewModel,
                     object: object,
                     position: viewModel.snapshot.positions.first { $0.id == object.id }
                 )
@@ -67,14 +75,14 @@ struct ContentView: View {
         .onChange(of: viewModel.selectedObjectID) { _, newValue in
             if newValue == nil {
                 showDetails = false
-            } else if !showSearch && !showLocation && !showTonight {
+            } else if !showSearch && !showFavorites && !showLocation && !showTonight {
                 showDetails = true
             }
         }
     }
 
     private func presentSelectedDetailsIfNeeded() {
-        if viewModel.selectedObjectID != nil, !showSearch, !showTonight {
+        if viewModel.selectedObjectID != nil, !showSearch, !showFavorites, !showTonight {
             showDetails = true
         }
     }
@@ -159,8 +167,15 @@ struct ContentView: View {
             }
 
             SkyRoundIconButton(
+                systemName: "star",
+                accessibilityLabel: "打开收藏"
+            ) {
+                showFavorites = true
+            }
+
+            SkyRoundIconButton(
                 systemName: "sparkles",
-                accessibilityLabel: "今晚可见"
+                accessibilityLabel: "今晚观测计划"
             ) {
                 showTonight = true
             }
@@ -182,11 +197,11 @@ struct ContentView: View {
 
                 Spacer()
 
-                if !viewModel.snapshot.recommendations.isEmpty {
+                if !(viewModel.observationPlan?.recommendations.isEmpty ?? true) {
                     Button {
                         showTonight = true
                     } label: {
-                        Label("今晚可见", systemImage: "moon.stars.fill")
+                        Label("今晚计划", systemImage: "moon.stars.fill")
                             .font(.caption.weight(.semibold))
                             .padding(.horizontal, 12)
                             .frame(height: 34)

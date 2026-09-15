@@ -12,7 +12,15 @@ struct MacInspectorView: View {
                     ObjectDetailsContent(
                         object: object,
                         position: viewModel.snapshot.positions.first { $0.id == object.id },
-                        compact: true
+                        compact: true,
+                        visibility: viewModel.visibility(for: object.id),
+                        timeZone: viewModel.observer.timeZone,
+                        isFavorite: viewModel.isFavorite(object.id),
+                        isReminderEnabled: viewModel.isReminderEnabled(object.id),
+                        onToggleFavorite: { viewModel.toggleFavorite(object) },
+                        onToggleReminder: {
+                            Task { await viewModel.toggleReminder(for: object) }
+                        }
                     )
                     .padding(18)
                 }
@@ -42,22 +50,35 @@ struct MacInspectorView: View {
                     metricRow("推荐目标", "\(viewModel.snapshot.recommendations.count) 个")
                 }
 
-                if let sun = position(for: "sun"), let moon = position(for: "moon") {
+                if let plan = viewModel.observationPlan {
                     infoCard {
-                        metricRow("太阳", "\(sun.azimuthText) · \(sun.altitudeText)")
+                        metricRow("有效暗夜", plan.night.effectiveDarkStart.map { timeText($0) } ?? "—")
                         Divider()
-                        metricRow("月球", "\(moon.azimuthText) · \(moon.altitudeText)")
+                        metricRow("暗夜结束", plan.night.effectiveDarkEnd.map { timeText($0) } ?? "—")
+                        Divider()
+                        metricRow("月相", "\(plan.moon.phase.localizedName) · \(plan.moon.illuminationText)")
                     }
+                } else if case .loading = viewModel.observationPlanState {
+                    ProgressView("正在计算今晚观测计划…")
+                        .frame(maxWidth: .infinity)
+                        .padding(18)
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("今晚可见")
+                    Text("今晚推荐")
                         .font(.headline)
-                    ForEach(viewModel.snapshot.recommendations) { position in
+                    ForEach(viewModel.observationPlan?.recommendations.prefix(5).map { $0 } ?? []) { visibility in
                         Button {
-                            viewModel.select(position.object)
+                            viewModel.select(visibility.object)
                         } label: {
-                            TonightRecommendationRow(position: position)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(visibility.object.name)
+                                    .font(.body.weight(.semibold))
+                                Text("\(timeText(visibility.bestTime)) · 高度 \(String(format: "%.0f°", visibility.maximumAltitude)) · \(visibility.durationText)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .buttonStyle(.plain)
                     }
@@ -67,6 +88,14 @@ struct MacInspectorView: View {
             }
             .padding(18)
         }
+    }
+
+    private func timeText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_Hans_CN")
+        formatter.timeZone = viewModel.observer.timeZone
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
     }
 
     private var aboveHorizonCount: Int {

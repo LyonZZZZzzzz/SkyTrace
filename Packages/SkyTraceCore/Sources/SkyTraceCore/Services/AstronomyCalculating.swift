@@ -3,6 +3,28 @@ import Foundation
 
 public protocol AstronomyCalculating: Sendable {
     func horizontalTransform(for moment: SkyMoment, observer: ObserverContext) -> HorizontalTransform
+    func riseSet(
+        body: AstronomyBody,
+        startDate: Date,
+        observer: ObserverContext,
+        searchDays: Double
+    ) -> AstronomyRiseSet
+    func altitudeCrossing(
+        body: AstronomyBody,
+        direction: AstronomyDirection,
+        altitude: Double,
+        startDate: Date,
+        observer: ObserverContext,
+        searchDays: Double
+    ) -> Date?
+    func moonInfo(date: Date) -> AstronomyMoonInfo
+    func horizontal(
+        body: AstronomyBody,
+        date: Date,
+        latitude: Double,
+        longitude: Double,
+        height: Double
+    ) -> AstronomyHorizontalCoordinate
     func horizontal(
         object: CelestialObject,
         moment: SkyMoment,
@@ -20,6 +42,62 @@ public struct AstronomyService: AstronomyCalculating {
             latitude: observer.latitude,
             longitude: observer.longitude,
             height: observer.altitude
+        )
+    }
+
+    public func riseSet(
+        body: AstronomyBody,
+        startDate: Date,
+        observer: ObserverContext,
+        searchDays: Double = 2
+    ) -> AstronomyRiseSet {
+        AstronomyEngine.riseSet(
+            body: body,
+            startDate: startDate,
+            latitude: observer.latitude,
+            longitude: observer.longitude,
+            height: observer.altitude,
+            searchDays: searchDays
+        )
+    }
+
+    public func altitudeCrossing(
+        body: AstronomyBody,
+        direction: AstronomyDirection,
+        altitude: Double,
+        startDate: Date,
+        observer: ObserverContext,
+        searchDays: Double = 2
+    ) -> Date? {
+        AstronomyEngine.altitudeCrossing(
+            body: body,
+            direction: direction,
+            altitude: altitude,
+            startDate: startDate,
+            latitude: observer.latitude,
+            longitude: observer.longitude,
+            height: observer.altitude,
+            searchDays: searchDays
+        )
+    }
+
+    public func moonInfo(date: Date) -> AstronomyMoonInfo {
+        AstronomyEngine.moonInfo(date: date)
+    }
+
+    public func horizontal(
+        body: AstronomyBody,
+        date: Date,
+        latitude: Double,
+        longitude: Double,
+        height: Double = 0
+    ) -> AstronomyHorizontalCoordinate {
+        AstronomyEngine.horizontal(
+            body: body,
+            date: date,
+            latitude: latitude,
+            longitude: longitude,
+            height: height
         )
     }
 

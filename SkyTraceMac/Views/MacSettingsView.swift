@@ -1,7 +1,9 @@
+import SkyTraceCore
 import SkyTraceUI
 import SwiftUI
 
 struct MacSettingsView: View {
+    @Bindable var viewModel: SkyViewModel
     @Bindable var uiState: MacUIState
 
     var body: some View {
@@ -29,6 +31,20 @@ struct MacSettingsView: View {
             .tabItem { Label("显示", systemImage: "sparkles") }
 
             Form {
+                Section("观测提醒") {
+                    Toggle(
+                        "允许观测提醒",
+                        isOn: Binding(
+                            get: { viewModel.favoriteStore.remindersEnabled },
+                            set: { value in
+                                Task { await viewModel.setRemindersEnabled(value) }
+                            }
+                        )
+                    )
+                    Text("首次开启时才会请求系统权限；提醒只调度下一次最佳观测时刻。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Section {
                     Text("观测位置、时间与相机状态会随主窗口自动恢复。")
                     Text("Mac 与 iPhone 的设置彼此独立，不会上传到服务器。")

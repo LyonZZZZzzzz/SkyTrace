@@ -7,10 +7,19 @@ struct MacSidebarView: View {
 
     var body: some View {
         List(selection: selection) {
-            Section("今晚可见") {
-                ForEach(viewModel.snapshot.recommendations) { position in
-                    objectRow(position.object)
-                        .tag(position.object.id)
+            if !viewModel.favoriteObjects.isEmpty {
+                Section("收藏") {
+                    ForEach(viewModel.favoriteObjects) { object in
+                        objectRow(object)
+                            .tag(object.id)
+                    }
+                }
+            }
+
+            Section("今晚观测") {
+                ForEach(viewModel.observationPlan?.recommendations ?? []) { visibility in
+                    objectRow(visibility.object)
+                        .tag(visibility.object.id)
                 }
             }
 

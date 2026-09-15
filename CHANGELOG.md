@@ -5,6 +5,24 @@ All notable changes to SkyTrace are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project follows [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-09-15
+
+### Added
+
+- Complete tonight observation plan with sunset, sunrise and three twilight phases
+- Moon phase, illumination, moonrise and moonset information
+- Per-object visibility windows, best viewing time, duration and recommendation reasons
+- Local favorites for stars, planets, Sun, Moon, constellations and Messier objects
+- Optional local reminders for the next best viewing time
+- Favorites sections and observation timeline on both iOS and macOS
+- Observation planner, favorite persistence, permission and short-window tests
+
+### Changed
+
+- Tonight recommendations now use the next dark interval instead of current altitude alone
+- Object detail views include best time, duration and viewing-window context
+- App version updated to 1.1.0 (build 2)
+
 ## [1.0.0] - 2026-09-14
 
 ### Added

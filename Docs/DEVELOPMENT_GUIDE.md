@@ -236,7 +236,25 @@ SwiftUI 标签层必须使用同一个 `basis` 投影。禁止在平台手势代
 
 这样名称会稳定落在对应连线网络的中心。
 
-## 13. 构建
+## 13. 观测计划与提醒
+
+v1.1 新增 `ObservationPlanner`：
+
+1. 根据用户本地时间和日期确定观测夜晚。
+2. 计算日落、日出、民用/航海/天文暮光。
+3. 计算月相、照亮比例、月升和月落。
+4. 在有效暗夜中按 10 分钟采样目标高度。
+5. 细化高度穿越时间并过滤短于 20 分钟的窗口。
+6. 综合目标类型、亮度、最高高度、持续时间和月光干扰评分。
+7. 输出最佳时刻、时长和大众化推荐原因。
+
+收藏通过 `FavoriteStore` 保存在各平台 UserDefaults。通知使用
+`ObservationReminderScheduling` 协议，iOS/macOS App 注入真实
+`UserNotificationScheduler`，Core 测试使用 Noop 或测试替身。
+
+通知权限只在用户主动开启提醒时请求，拒绝权限不会影响收藏和星图使用。
+
+## 14. 构建
 
 生成工程：
 
@@ -268,7 +286,7 @@ xcodebuild \
   build
 ```
 
-## 14. 测试
+## 15. 测试
 
 Core：
 
@@ -302,7 +320,7 @@ xcodebuild \
 
 GitHub Actions 会执行 Core、macOS 构建/单元测试和 iOS 构建/单元测试。UI 测试由于依赖桌面会话，保留为本地验收。
 
-## 15. 常见问题
+## 16. 常见问题
 
 ### Xcode 找不到 iOS Simulator
 
@@ -344,7 +362,7 @@ xcodebuild -resolvePackageDependencies -project SkyTrace.xcodeproj
 - 星座锚点是否来自 `SkySnapshot`
 - 是否绕开共享投影自行计算屏幕坐标
 
-## 16. 贡献和发布
+## 17. 贡献和发布
 
 提交前：
 

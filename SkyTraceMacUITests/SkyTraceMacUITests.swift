@@ -11,7 +11,13 @@ final class SkyTraceMacUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["今晚可见"].waitForExistence(timeout: 6))
+        XCTAssertTrue(app.staticTexts["今晚观测"].waitForExistence(timeout: 6))
+
+        let planButton = app.buttons["今晚可见"]
+        XCTAssertTrue(planButton.waitForExistence(timeout: 5))
+        planButton.click()
+        XCTAssertTrue(app.staticTexts["今夜时间线"].waitForExistence(timeout: 10))
+        app.buttons["关闭"].click()
 
         app.activate()
         app.typeKey("f", modifierFlags: .command)

@@ -12,10 +12,13 @@ struct MacSkyWorkspaceView: View {
 
             MacSkySceneView(
                 snapshot: viewModel.snapshot,
+                catalog: viewModel.sceneCatalog,
                 camera: viewModel.camera,
                 selectedObjectID: viewModel.selectedObjectID,
                 showConstellations: uiState.showConstellations,
                 starScale: uiState.starScale,
+                labelMagnitudeLimit: uiState.labelDensity.magnitudeLimit,
+                showCardinals: uiState.showCardinals,
                 onCameraChange: { viewModel.camera = $0 },
                 onSelect: { objectID in
                     if let objectID {
@@ -27,14 +30,6 @@ struct MacSkyWorkspaceView: View {
                 onReset: viewModel.resetCamera
             )
 
-            SkyLabelsView(
-                snapshot: viewModel.snapshot,
-                camera: viewModel.camera,
-                selectedObjectID: viewModel.selectedObjectID,
-                density: uiState.labelDensity,
-                showCardinals: uiState.showCardinals
-            )
-            .allowsHitTesting(false)
 
             VStack {
                 HStack {

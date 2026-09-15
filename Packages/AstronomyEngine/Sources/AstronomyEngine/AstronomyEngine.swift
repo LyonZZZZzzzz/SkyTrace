@@ -125,11 +125,18 @@ public struct AstronomySeasonEvents: Equatable, Sendable {
 public struct HorizontalTransform: Sendable {
     private let matrix: [Double]
 
+    /// Matrix elements in row-major order.
+    public var matrixElements: [Double] { matrix }
+
     fileprivate init(matrix: [Double]) {
         self.matrix = matrix
     }
 
-    public func horizontal(raDegrees: Double, decDegrees: Double) -> AstronomyHorizontalCoordinate {
+    public func horizontal(
+        raDegrees: Double,
+        decDegrees: Double,
+        refraction: Bool = true
+    ) -> AstronomyHorizontalCoordinate {
         let ra = raDegrees * .pi / 180
         let dec = decDegrees * .pi / 180
         let x = cos(dec) * cos(ra)
@@ -138,7 +145,12 @@ public struct HorizontalTransform: Sendable {
         let hx = matrix[0] * x + matrix[1] * y + matrix[2] * z
         let hy = matrix[3] * x + matrix[4] * y + matrix[5] * z
         let hz = matrix[6] * x + matrix[7] * y + matrix[8] * z
-        let horizontal = AstronomyEngine.vectorToHorizontal(x: hx, y: hy, z: hz)
+        let horizontal = AstronomyEngine.vectorToHorizontal(
+            x: hx,
+            y: hy,
+            z: hz,
+            refraction: refraction
+        )
         return AstronomyHorizontalCoordinate(
             azimuth: AstronomyEngine.normalizedDegrees(horizontal.azimuth),
             altitude: horizontal.altitude,
@@ -379,7 +391,8 @@ public enum AstronomyEngine {
     fileprivate static func vectorToHorizontal(
         x: Double,
         y: Double,
-        z: Double
+        z: Double,
+        refraction: Bool
     ) -> (azimuth: Double, altitude: Double) {
         let time = Astronomy_MakeTime(2000, 1, 1, 12, 0, 0)
         let vector = astro_vector_t(
@@ -389,7 +402,10 @@ public enum AstronomyEngine {
             z: z,
             t: time
         )
-        let spherical = Astronomy_HorizonFromVector(vector, REFRACTION_NORMAL)
+        let spherical = Astronomy_HorizonFromVector(
+            vector,
+            refraction ? REFRACTION_NORMAL : REFRACTION_NONE
+        )
         return (spherical.lon, spherical.lat)
     }
 

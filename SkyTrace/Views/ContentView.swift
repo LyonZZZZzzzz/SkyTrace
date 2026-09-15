@@ -91,10 +91,15 @@ struct ContentView: View {
         ZStack {
             SkySceneView(
                 snapshot: viewModel.snapshot,
+                catalog: viewModel.sceneCatalog,
                 camera: viewModel.camera,
                 selectedObjectID: viewModel.selectedObjectID,
                 showConstellations: showConstellations,
                 starScale: starScale,
+                labelMagnitudeLimit: labelDensity.magnitudeLimit,
+                showCardinals: showCardinals,
+                motionEnabled: viewModel.motionEnabled,
+                motionReading: viewModel.motionReading,
                 onCameraChange: { viewModel.camera = $0 },
                 onTap: { objectID in
                     if let objectID {
@@ -107,14 +112,6 @@ struct ContentView: View {
             )
             .ignoresSafeArea()
 
-            SkyLabelsView(
-                snapshot: viewModel.snapshot,
-                camera: viewModel.camera,
-                selectedObjectID: viewModel.selectedObjectID,
-                density: labelDensity,
-                showCardinals: showCardinals
-            )
-            .allowsHitTesting(false)
 
             VStack(spacing: 0) {
                 header
@@ -134,12 +131,6 @@ struct ContentView: View {
                     .frame(maxHeight: .infinity, alignment: .top)
                     .padding(.top, 92)
             }
-        }
-        .onChange(of: viewModel.motionReading) { _, reading in
-            guard viewModel.motionEnabled, let reading else { return }
-            viewModel.cameraAzimuth = reading.azimuth
-            viewModel.cameraAltitude = reading.altitude
-            viewModel.cameraRoll = reading.roll
         }
     }
 

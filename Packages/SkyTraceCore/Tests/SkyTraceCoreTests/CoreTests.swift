@@ -20,11 +20,46 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(point?.y ?? -1, 400, accuracy: 0.01)
     }
 
+    func testSceneCatalogSeparatesStaticAndDynamicObjects() throws {
+        let catalog = try CatalogRepository()
+        let sceneCatalog = SkySceneCatalog(
+            objects: catalog.allObjects,
+            constellations: catalog.constellations
+        )
+        let expectedSegments = catalog.constellations
+            .flatMap(\.segments)
+            .reduce(0) { $0 + max($1.count - 1, 0) }
+
+        XCTAssertEqual(
+            sceneCatalog.staticObjects.count,
+            catalog.stars.count + catalog.deepSkyObjects.count
+        )
+        XCTAssertEqual(sceneCatalog.solarSystemObjects.count, 9)
+        XCTAssertEqual(sceneCatalog.segments.count, expectedSegments)
+        XCTAssertEqual(
+            sceneCatalog.directionsJ2000.count,
+            catalog.stars.count + catalog.deepSkyObjects.count + catalog.constellations.count
+        )
+    }
+
     @MainActor
-    func testViewModelTimeTravelUsesSharedCore() throws {
+    func testRapidTimeRequestsApplyOnlyLatestSnapshot() async throws {
+        let viewModel = SkyViewModel(catalog: try CatalogRepository())
+        let original = viewModel.moment.date
+        viewModel.setDate(original.addingTimeInterval(3_600))
+        viewModel.setDate(original.addingTimeInterval(7_200))
+        await viewModel.waitForSnapshotUpdate()
+
+        XCTAssertEqual(viewModel.moment.date.timeIntervalSince(original), 7_200, accuracy: 0.1)
+        XCTAssertEqual(viewModel.snapshot.moment.date, viewModel.moment.date)
+    }
+
+    @MainActor
+    func testViewModelTimeTravelUsesSharedCore() async throws {
         let viewModel = try XCTUnwrap(SkyViewModel(catalog: try CatalogRepository()) as SkyViewModel?)
         let original = viewModel.moment.date
         viewModel.shiftTime(by: 3_600)
+        await viewModel.waitForSnapshotUpdate()
 
         XCTAssertEqual(viewModel.moment.date.timeIntervalSince(original), 3_600, accuracy: 0.1)
         XCTAssertEqual(viewModel.snapshot.moment.date, viewModel.moment.date)

@@ -52,6 +52,51 @@ final class CameraBasisTests: XCTestCase {
         XCTAssertLessThan(angle(actualBackward, basis.forward * -1), 0.01)
     }
 
+
+    func testSceneMatrixMatchesSharedHorizontalProjection() {
+        let observer = ObserverContext.shanghai
+        let moment = SkyMoment(date: Date(timeIntervalSince1970: 1_735_689_600))
+        let transform = AstronomyService().horizontalTransform(for: moment, observer: observer)
+        let samples: [(Double, Double)] = [
+            (0, 0), (45, 35), (90, -20), (137, 62), (270, 12), (359, -80)
+        ]
+
+        for (ra, dec) in samples {
+            let horizontal = transform.horizontal(
+                raDegrees: ra,
+                decDegrees: dec,
+                refraction: false
+            )
+            let expected = SkyPosition(
+                object: CelestialObject(
+                    id: "sample",
+                    name: "sample",
+                    englishName: "sample",
+                    designation: "sample",
+                    kind: .star,
+                    raDegrees: ra,
+                    decDegrees: dec,
+                    magnitude: 1,
+                    bvColorIndex: 0,
+                    detail: "",
+                    aliases: []
+                ),
+                azimuth: horizontal.azimuth,
+                altitude: horizontal.altitude
+            ).horizontalVector
+            let raRadians = ra * .pi / 180
+            let decRadians = dec * .pi / 180
+            let actual = transform.sceneVector(
+                x: cos(decRadians) * cos(raRadians),
+                y: cos(decRadians) * sin(raRadians),
+                z: sin(decRadians)
+            )
+            XCTAssertEqual(actual.x, expected.x, accuracy: 0.000_01)
+            XCTAssertEqual(actual.y, expected.y, accuracy: 0.000_01)
+            XCTAssertEqual(actual.z, expected.z, accuracy: 0.000_01)
+        }
+    }
+
     func testProjectionUsesSameCameraBasis() {
         let state = SkyCameraState(azimuth: 90, altitude: 35, roll: 17, fieldOfView: 60)
         let projection = SkyProjection(camera: state, size: CGSize(width: 1200, height: 800))

@@ -1,7 +1,9 @@
 import CoreGraphics
 import Foundation
 import SceneKit
+import os
 import simd
+import SpriteKit
 #if os(macOS)
 import AppKit
 #else
@@ -9,39 +11,70 @@ import UIKit
 #endif
 
 @MainActor
-public final class SkySceneController {
+public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     public let sceneView: SCNView
     public let cameraNode: SCNNode
     public let camera: SCNCamera
 
+    public private(set) var metrics = SkyFrameMetrics()
+    public private(set) var staticGeometryRebuildCount = 0
+    public var onCameraChange: ((SkyCameraState) -> Void)?
+    public var isUserInteracting = false
+    public var currentCameraState: SkyCameraState { cameraState }
+
+    private let catalog: SkySceneCatalog?
+    private let astronomy: any AstronomyCalculating
+    private let celestialRootNode: SCNNode
     private let starsNode: SCNNode
     private let linesNode: SCNNode
     private let horizonNode: SCNNode
+    private let dynamicRootNode: SCNNode
     private let selectionNode: SCNNode
+    private let labelOverlayScene: SkyLabelOverlayScene
+    private var dynamicNodes: [String: SCNNode] = [:]
+    private var targetSnapshot: SkySnapshot = .empty
+    private var previousSnapshot: SkySnapshot = .empty
+    private var currentSnapshotVectors: [String: Vector3D] = [:]
+    private var previousDynamicVectors: [String: Vector3D] = [:]
+    private var targetDynamicVectors: [String: Vector3D] = [:]
+    private var currentDynamicVectors: [String: Vector3D] = [:]
+    private var currentSceneMatrix = matrix_identity_float3x3
+    private var previousSceneMatrix = matrix_identity_float3x3
+    private var targetSceneMatrix = matrix_identity_float3x3
+    private var previousQuaternion = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
+    private var targetQuaternion = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
+    private var transitionStartTime: TimeInterval = 0
+    private var transitionDuration: TimeInterval = 0
+    private var showConstellations = true
+    private var starScale: CGFloat = 1
+    private var hasBuiltStaticGeometry = false
+    private var staticGeometryScale: CGFloat?
     private var geometryKey: GeometryKey?
-    private var snapshot: SkySnapshot = .empty
     private var cameraState = SkyCameraState()
     private var selectedObjectID: String?
+    private var labelMagnitudeLimit = 2.8
+    private var showCardinals = true
+    private var labelSources: [LabelSource] = []
+    private var labelSourceKey: LabelSourceKey?
+    private var motionTarget: SkyMotionReading?
+    private var debugFrameCounter = 0
+    private nonisolated let frameUpdateLock = OSAllocatedUnfairLock(initialState: false)
 
-    public init(sceneView: SCNView = SCNView(frame: .zero)) {
+    public init(
+        sceneView: SCNView = SCNView(frame: .zero),
+        catalog: SkySceneCatalog? = nil,
+        astronomy: any AstronomyCalculating = AstronomyService()
+    ) {
         self.sceneView = sceneView
-#if os(macOS)
-        sceneView.backgroundColor = NSColor(red: 0.008, green: 0.024, blue: 0.055, alpha: 1)
-#else
-        sceneView.backgroundColor = UIColor(red: 0.008, green: 0.024, blue: 0.055, alpha: 1)
-#endif
-        sceneView.antialiasingMode = .multisampling2X
-        sceneView.preferredFramesPerSecond = 60
-        sceneView.rendersContinuously = false
-        sceneView.autoenablesDefaultLighting = false
-        sceneView.isPlaying = true
-
-        let scene = SCNScene()
-        scene.background.contents = CGColor(red: 0.008, green: 0.024, blue: 0.055, alpha: 1)
-        sceneView.scene = scene
-
-        cameraNode = SCNNode()
-        camera = SCNCamera()
+        self.catalog = catalog
+        self.astronomy = astronomy
+        self.celestialRootNode = SCNNode()
+        self.starsNode = SCNNode()
+        self.linesNode = SCNNode()
+        self.horizonNode = SCNNode(geometry: StarGeometryFactory.makeHorizon())
+        self.dynamicRootNode = SCNNode()
+        let cameraNode = SCNNode()
+        let camera = SCNCamera()
         camera.fieldOfView = 70
         camera.projectionDirection = .vertical
         camera.zNear = 0.1
@@ -51,23 +84,50 @@ public final class SkySceneController {
         camera.bloomThreshold = 1
         camera.bloomBlurRadius = 0
         cameraNode.camera = camera
+        self.cameraNode = cameraNode
+        self.camera = camera
+        self.selectionNode = StarGeometryFactory.makeSelectionNode()
+        self.labelOverlayScene = SkyLabelOverlayScene(size: CGSize(width: 1, height: 1))
+
+        super.init()
+
+#if os(macOS)
+        sceneView.backgroundColor = NSColor(red: 0.008, green: 0.024, blue: 0.055, alpha: 1)
+#else
+        sceneView.backgroundColor = UIColor(red: 0.008, green: 0.024, blue: 0.055, alpha: 1)
+#endif
+        sceneView.antialiasingMode = .multisampling2X
+        sceneView.preferredFramesPerSecond = 60
+        sceneView.rendersContinuously = true
+        sceneView.autoenablesDefaultLighting = false
+        sceneView.isPlaying = true
+
+        let scene = SCNScene()
+        scene.background.contents = CGColor(red: 0.008, green: 0.024, blue: 0.055, alpha: 1)
+        sceneView.scene = scene
+
         scene.rootNode.addChildNode(cameraNode)
         sceneView.pointOfView = cameraNode
 
-        starsNode = SCNNode()
+        celestialRootNode.name = "celestialRoot"
         starsNode.name = "starsNode"
-        scene.rootNode.addChildNode(starsNode)
-
-        linesNode = SCNNode()
         linesNode.name = "linesNode"
-        scene.rootNode.addChildNode(linesNode)
+        celestialRootNode.addChildNode(starsNode)
+        celestialRootNode.addChildNode(linesNode)
+        scene.rootNode.addChildNode(celestialRootNode)
 
-        horizonNode = SCNNode(geometry: StarGeometryFactory.makeHorizon())
-        linesNode.addChildNode(horizonNode)
+        horizonNode.name = "horizonNode"
+        scene.rootNode.addChildNode(horizonNode)
 
-        selectionNode = StarGeometryFactory.makeSelectionNode()
+        dynamicRootNode.name = "dynamicRoot"
+        scene.rootNode.addChildNode(dynamicRootNode)
+
         selectionNode.isHidden = true
         scene.rootNode.addChildNode(selectionNode)
+
+        sceneView.overlaySKScene = labelOverlayScene
+        sceneView.delegate = self
+        updateCamera(SkyCameraState(), selectedObjectID: nil, notify: false)
     }
 
     public func update(
@@ -75,86 +135,514 @@ public final class SkySceneController {
         showConstellations: Bool,
         starScale: CGFloat
     ) {
-        self.snapshot = snapshot
-        let key = GeometryKey(
-            moment: snapshot.moment.date,
-            observer: snapshot.observer,
-            showConstellations: showConstellations,
-            starScale: starScale
-        )
-        guard key != geometryKey else { return }
-        geometryKey = key
-        starsNode.geometry = StarGeometryFactory.makeStars(snapshot.positions, scale: starScale)
-        linesNode.geometry = showConstellations
-            ? StarGeometryFactory.makeConstellationLines(snapshot.constellationSegments)
-            : nil
-        horizonNode.isHidden = !showConstellations
+        let targetChanged = snapshot.moment != targetSnapshot.moment ||
+            snapshot.observer != targetSnapshot.observer ||
+            targetSnapshot.positions.isEmpty
+        let scaleChanged = staticGeometryScale != starScale
+        self.showConstellations = showConstellations
+        self.starScale = starScale
+
+        if let catalog {
+            if !hasBuiltStaticGeometry || scaleChanged {
+                buildStaticGeometry(catalog: catalog, scale: starScale)
+            }
+            starsNode.isHidden = false
+            linesNode.isHidden = !showConstellations
+            horizonNode.isHidden = !showConstellations
+        } else {
+            let key = GeometryKey(
+                moment: snapshot.moment.date,
+                observer: snapshot.observer,
+                showConstellations: showConstellations,
+                starScale: starScale
+            )
+            if key != geometryKey {
+                geometryKey = key
+                starsNode.geometry = StarGeometryFactory.makeStars(snapshot.positions, scale: starScale)
+                linesNode.geometry = showConstellations
+                    ? StarGeometryFactory.makeConstellationLines(snapshot.constellationSegments)
+                    : nil
+                linesNode.isHidden = !showConstellations
+                horizonNode.isHidden = !showConstellations
+                metrics.recordGeometryRebuild()
+                staticGeometryRebuildCount += 1
+            }
+        }
+
+        if targetChanged {
+            beginTransition(to: snapshot)
+        } else {
+            targetSnapshot = snapshot
+            rebuildSnapshotVectors()
+            ensureDynamicNodes(for: snapshot)
+            updateLabelSourcesIfNeeded()
+        }
         updateSelection()
     }
 
-    public func updateCamera(_ state: SkyCameraState, selectedObjectID: String?) {
+    public func updateLabels(magnitudeLimit: Double, showCardinals: Bool) {
+        self.labelMagnitudeLimit = magnitudeLimit
+        self.showCardinals = showCardinals
+        labelSourceKey = nil
+        updateLabelSourcesIfNeeded()
+    }
+
+    public func updateCamera(
+        _ state: SkyCameraState,
+        selectedObjectID: String?,
+        notify: Bool = true
+    ) {
         cameraState = state
         self.selectedObjectID = selectedObjectID
         cameraNode.simdOrientation = simd_quatf(state.basis.orientationMatrix)
         camera.fieldOfView = CGFloat(state.fieldOfView)
         updateSelection()
+        updateLabelSourcesIfNeeded()
+        if notify {
+            onCameraChange?(state)
+        }
     }
 
     public func pick(at point: CGPoint, in size: CGSize) -> String? {
         let projection = SkyProjection(camera: cameraState, size: size)
-        return snapshot.positions.compactMap { position -> (String, CGFloat)? in
-            guard let pointOnScreen = projection.screenPoint(for: position.horizontalVector) else { return nil }
+        let objects = catalog?.objects ?? targetSnapshot.positions.map(\.object)
+        return objects.compactMap { object -> (String, CGFloat)? in
+            guard let direction = displayVector(for: object.id) else { return nil }
+            guard let pointOnScreen = projection.screenPoint(for: direction) else { return nil }
             let distance = hypot(pointOnScreen.x - point.x, pointOnScreen.y - point.y)
-            return distance <= 32 ? (position.id, distance) : nil
+            return distance <= 32 ? (object.id, distance) : nil
         }
         .min { $0.1 < $1.1 }?
         .0
     }
 
-    public func orbit(horizontalDelta: Double, verticalDelta: Double, viewportSize: CGSize) {
+    public func orbit(
+        horizontalDelta: Double,
+        verticalDelta: Double,
+        viewportSize: CGSize,
+        notify: Bool = true
+    ) {
         let horizontalScale = cameraState.fieldOfView / max(Double(viewportSize.width), 1)
         let verticalScale = cameraState.fieldOfView / max(Double(viewportSize.height), 1)
-        cameraState.azimuth = Self.normalizedDegrees(cameraState.azimuth - horizontalDelta * horizontalScale)
-        cameraState.altitude = min(89, max(-89, cameraState.altitude + verticalDelta * verticalScale))
-        updateCamera(cameraState, selectedObjectID: selectedObjectID)
+        var state = cameraState
+        state.azimuth = Self.normalizedDegrees(state.azimuth - horizontalDelta * horizontalScale)
+        state.altitude = min(89, max(-89, state.altitude + verticalDelta * verticalScale))
+        updateCamera(state, selectedObjectID: selectedObjectID, notify: notify)
     }
 
-    public func zoom(by scale: Double) {
-        cameraState.fieldOfView = min(110, max(20, cameraState.fieldOfView / max(scale, 0.05)))
-        updateCamera(cameraState, selectedObjectID: selectedObjectID)
+    public func zoom(by scale: Double, notify: Bool = true) {
+        var state = cameraState
+        state.fieldOfView = min(110, max(20, state.fieldOfView / max(scale, 0.05)))
+        updateCamera(state, selectedObjectID: selectedObjectID, notify: notify)
     }
 
-    public func rotate(by degrees: Double) {
-        cameraState.roll = Self.normalizedDegrees(cameraState.roll + degrees)
-        updateCamera(cameraState, selectedObjectID: selectedObjectID)
+    public func rotate(by degrees: Double, notify: Bool = true) {
+        var state = cameraState
+        state.roll = Self.normalizedDegrees(state.roll + degrees)
+        updateCamera(state, selectedObjectID: selectedObjectID, notify: notify)
+    }
+
+    public func nudge(horizontal: Double = 0, vertical: Double = 0, zoom: Double = 0, notify: Bool = true) {
+        var state = cameraState
+        state.azimuth = Self.normalizedDegrees(state.azimuth + horizontal)
+        state.altitude = min(89, max(-89, state.altitude + vertical))
+        if zoom != 0 {
+            state.fieldOfView = min(110, max(20, state.fieldOfView + zoom))
+        }
+        updateCamera(state, selectedObjectID: selectedObjectID, notify: notify)
+    }
+
+    public func setMotionReading(_ reading: SkyMotionReading?) {
+        motionTarget = reading
+    }
+
+    public func resetMetrics() {
+        metrics.reset()
+    }
+
+    var debugCelestialRootNode: SCNNode { celestialRootNode }
+    var debugCurrentSceneMatrix: simd_float3x3 { currentSceneMatrix }
+    var debugCurrentDynamicVectors: [String: Vector3D] { currentDynamicVectors }
+    var debugTransitionStartTime: TimeInterval { transitionStartTime }
+    var debugTransitionDuration: TimeInterval { transitionDuration }
+
+    func debugAdvanceAnimation(to time: TimeInterval) {
+        updateAnimation(at: time)
+    }
+
+    func debugOverlayPoint(
+        for direction: Vector3D,
+        renderer: any SCNSceneRenderer
+    ) -> CGPoint? {
+        overlayPoint(for: direction, size: sceneView.bounds.size, renderer: renderer)
+    }
+
+
+    public nonisolated func renderer(_ renderer: any SCNSceneRenderer, updateAtTime time: TimeInterval) {
+        let shouldSchedule = frameUpdateLock.withLock { isScheduled -> Bool in
+            guard !isScheduled else { return false }
+            isScheduled = true
+            return true
+        }
+        guard shouldSchedule else { return }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.updateFrame(at: time)
+            self.frameUpdateLock.withLock { $0 = false }
+        }
+    }
+
+    private func updateFrame(at time: TimeInterval) {
+        metrics.recordFrame(at: time)
+        updateAnimation(at: time)
+        updateOverlayLabels()
+#if DEBUG
+        debugFrameCounter += 1
+        if debugFrameCounter % 120 == 0 || metrics.consecutiveSlowFrames >= 3 {
+            SkyTraceDiagnostics.frames.debug(
+                "FPS \(self.metrics.averageFPS, privacy: .public) p95 \(self.metrics.p95FrameInterval, privacy: .public) p99 \(self.metrics.p99FrameInterval, privacy: .public)"
+            )
+            SkyTraceDiagnostics.event("FrameMetricsReport")
+        }
+#endif
+    }
+
+    private func buildStaticGeometry(catalog: SkySceneCatalog, scale: CGFloat) {
+        starsNode.geometry = StarGeometryFactory.makeStars(catalog.staticObjects, scale: scale)
+        linesNode.geometry = StarGeometryFactory.makeConstellationLinesFromJ2000(catalog.segments)
+        staticGeometryScale = scale
+        hasBuiltStaticGeometry = true
+        metrics.recordGeometryRebuild()
+        staticGeometryRebuildCount += 1
+    }
+
+    private func beginTransition(to snapshot: SkySnapshot) {
+        let now = CACurrentMediaTime()
+        previousSnapshot = targetSnapshot
+        previousSceneMatrix = currentSceneMatrix
+        previousQuaternion = simd_quatf(previousSceneMatrix)
+        previousDynamicVectors = currentDynamicVectors
+
+        targetSnapshot = snapshot
+        currentSnapshotVectors = Dictionary(
+            uniqueKeysWithValues: snapshot.positions.map { ($0.id, $0.horizontalVector) }
+        )
+        targetDynamicVectors = Dictionary(
+            uniqueKeysWithValues: snapshot.positions
+                .filter { Self.isSolarSystem($0.object.kind) }
+                .map { ($0.id, $0.horizontalVector) }
+        )
+        let transform = astronomy.horizontalTransform(for: snapshot.moment, observer: snapshot.observer)
+        targetSceneMatrix = transform.sceneMatrix
+        targetQuaternion = simd_quatf(targetSceneMatrix)
+        transitionStartTime = now
+        ensureDynamicNodes(for: snapshot)
+
+        if previousSnapshot.positions.isEmpty {
+            previousSceneMatrix = targetSceneMatrix
+            previousQuaternion = targetQuaternion
+            currentSceneMatrix = targetSceneMatrix
+            previousDynamicVectors = targetDynamicVectors
+            currentDynamicVectors = targetDynamicVectors
+            celestialRootNode.simdOrientation = targetQuaternion
+            transitionDuration = 0
+        } else {
+            transitionDuration = 0.22
+        }
+        rebuildSnapshotVectors()
+        updateLabelSourcesIfNeeded()
+    }
+
+    private func updateAnimation(at time: TimeInterval) {
+        if let motionTarget, !isUserInteracting {
+            var state = cameraState
+            let azimuthDelta = Self.shortestAngleDelta(from: state.azimuth, to: motionTarget.azimuth)
+            let rollDelta = Self.shortestAngleDelta(from: state.roll, to: motionTarget.roll)
+            let smoothing = 0.28
+            state.azimuth = Self.normalizedDegrees(state.azimuth + azimuthDelta * smoothing)
+            state.altitude += (motionTarget.altitude - state.altitude) * smoothing
+            state.roll = Self.normalizedDegrees(state.roll + rollDelta * smoothing)
+            updateCamera(state, selectedObjectID: selectedObjectID, notify: false)
+        }
+
+        let progress: Float
+        if transitionDuration > 0 {
+            let elapsed = max(0, time - transitionStartTime)
+            progress = Float(min(1, elapsed / transitionDuration))
+            if progress >= 1 {
+                transitionDuration = 0
+            }
+        } else {
+            progress = 1
+        }
+
+        let quaternion = progress >= 1
+            ? targetQuaternion
+            : simd_slerp(previousQuaternion, targetQuaternion, progress)
+        celestialRootNode.simdOrientation = quaternion
+        currentSceneMatrix = simd_float3x3(quaternion)
+        updateDynamicVectors(progress: progress)
+        updateDynamicNodePositions()
+        updateSelection()
+    }
+
+    private func updateDynamicVectors(progress: Float) {
+        let ids = Set(targetDynamicVectors.keys).union(previousDynamicVectors.keys)
+        for id in ids {
+            let target = targetDynamicVectors[id] ?? previousDynamicVectors[id]
+            guard let target else { continue }
+            guard
+                let previous = previousDynamicVectors[id],
+                progress < 1,
+                let current = slerp(previous, target, progress)
+            else {
+                currentDynamicVectors[id] = target
+                continue
+            }
+            currentDynamicVectors[id] = current
+        }
+    }
+
+    private func updateDynamicNodePositions() {
+        var updated = 0
+        for (id, node) in dynamicNodes {
+            guard let direction = currentDynamicVectors[id] ?? targetDynamicVectors[id] else {
+                node.isHidden = true
+                continue
+            }
+            node.position = SCNVector3(
+                Float(direction.x * StarGeometryFactory.skyRadius * 0.98),
+                Float(direction.y * StarGeometryFactory.skyRadius * 0.98),
+                Float(direction.z * StarGeometryFactory.skyRadius * 0.98)
+            )
+            node.isHidden = false
+            updated += 1
+        }
+        if updated > 0 {
+            metrics.recordDynamicNodeUpdate(count: updated)
+        }
+    }
+
+    private func ensureDynamicNodes(for snapshot: SkySnapshot) {
+        for position in snapshot.positions where Self.isSolarSystem(position.object.kind) {
+            if dynamicNodes[position.id] == nil {
+                let node = StarGeometryFactory.makeBodyNode(for: position.object)
+                dynamicRootNode.addChildNode(node)
+                dynamicNodes[position.id] = node
+            }
+        }
+    }
+
+    private func rebuildSnapshotVectors() {
+        currentSnapshotVectors = Dictionary(
+            uniqueKeysWithValues: targetSnapshot.positions.map { ($0.id, $0.horizontalVector) }
+        )
+        targetDynamicVectors = Dictionary(
+            uniqueKeysWithValues: targetSnapshot.positions
+                .filter { Self.isSolarSystem($0.object.kind) }
+                .map { ($0.id, $0.horizontalVector) }
+        )
     }
 
     private func updateSelection() {
-        selectionNode.removeAction(forKey: "pulse")
         guard
             let selectedObjectID,
-            let position = snapshot.positions.first(where: { $0.id == selectedObjectID })
+            let direction = displayVector(for: selectedObjectID)
         else {
             selectionNode.isHidden = true
             return
         }
-        let point = position.horizontalVector * (StarGeometryFactory.skyRadius * 0.98)
+
+        let point = direction * (StarGeometryFactory.skyRadius * 0.98)
         selectionNode.position = SCNVector3(Float(point.x), Float(point.y), Float(point.z))
         selectionNode.isHidden = false
-        selectionNode.runAction(
-            SCNAction.repeatForever(
-                SCNAction.sequence([
-                    SCNAction.scale(to: 1.25, duration: 0.7),
-                    SCNAction.scale(to: 0.92, duration: 0.7)
-                ])
-            ),
-            forKey: "pulse"
+        if selectionNode.action(forKey: "pulse") == nil {
+            selectionNode.runAction(
+                SCNAction.repeatForever(
+                    SCNAction.sequence([
+                        SCNAction.scale(to: 1.25, duration: 0.7),
+                        SCNAction.scale(to: 0.92, duration: 0.7)
+                    ])
+                ),
+                forKey: "pulse"
+            )
+        }
+    }
+
+    private func displayVector(for objectID: String) -> Vector3D? {
+        if let catalog, let direction = catalog.directionJ2000(for: objectID) {
+            let world = currentSceneMatrix * SIMD3<Float>(
+                Float(direction.x),
+                Float(direction.y),
+                Float(direction.z)
+            )
+            return Vector3D(x: Double(world.x), y: Double(world.y), z: Double(world.z)).normalized
+        }
+        if let current = currentDynamicVectors[objectID] {
+            return current
+        }
+        return currentSnapshotVectors[objectID]
+    }
+
+    private func updateLabelSourcesIfNeeded() {
+        let key = LabelSourceKey(
+            selectedObjectID: selectedObjectID,
+            magnitudeLimit: labelMagnitudeLimit,
+            objectCount: catalog?.objects.count ?? targetSnapshot.positions.count
         )
+        guard key != labelSourceKey else { return }
+        labelSourceKey = key
+
+        let objects: [CelestialObject]
+        if let catalog {
+            objects = catalog.objects
+        } else {
+            objects = targetSnapshot.positions.map(\.object)
+        }
+
+        labelSources = objects.compactMap { object in
+            let selected = object.id == selectedObjectID
+            let shouldShow: Bool
+            switch object.kind {
+            case .star:
+                shouldShow = (object.magnitude ?? 99) <= labelMagnitudeLimit
+            case .deepSky:
+                shouldShow = (object.magnitude ?? 99) <= 5.0
+            case .constellation:
+                shouldShow = true
+            case .sun, .moon, .planet:
+                shouldShow = true
+            }
+            guard selected || shouldShow else { return nil }
+            let direction = catalog?.directionJ2000(for: object.id)
+            return LabelSource(object: object, j2000Direction: direction)
+        }
+        .sorted { lhs, rhs in
+            if lhs.object.id == selectedObjectID { return true }
+            if rhs.object.id == selectedObjectID { return false }
+            let lhsPriority = lhs.object.kind.labelPriority
+            let rhsPriority = rhs.object.kind.labelPriority
+            if lhsPriority != rhsPriority { return lhsPriority < rhsPriority }
+            return (lhs.object.magnitude ?? 99) < (rhs.object.magnitude ?? 99)
+        }
+    }
+
+    private func updateOverlayLabels() {
+        let start = CACurrentMediaTime()
+        let size = sceneView.bounds.size
+        guard size.width > 0, size.height > 0 else { return }
+
+        labelOverlayScene.size = size
+        var visuals: [SkyLabelVisual] = []
+        visuals.reserveCapacity(104)
+
+        if showCardinals {
+            let cardinals: [(String, Vector3D)] = [
+                ("北", vector(azimuth: 0, altitude: 0)),
+                ("东", vector(azimuth: 90, altitude: 0)),
+                ("南", vector(azimuth: 180, altitude: 0)),
+                ("西", vector(azimuth: 270, altitude: 0))
+            ]
+            for (text, direction) in cardinals {
+                if let point = overlayPoint(for: direction, size: size) {
+                    visuals.append(
+                        SkyLabelVisual(
+                            id: "cardinal-\(text)",
+                            text: text,
+                            point: point,
+                            kind: .constellation,
+                            selected: false
+                        )
+                    )
+                }
+            }
+        }
+
+        let cardinalCount = visuals.count
+        let forward = cameraState.basis.forward
+        for source in labelSources {
+            guard visuals.count < 100 + cardinalCount else { break }
+            guard let direction = displayVector(for: source.object.id) else { continue }
+            guard Vector3D.dot(direction, forward) > 0.02 else { continue }
+            guard let point = overlayPoint(for: direction, size: size) else { continue }
+            visuals.append(
+                SkyLabelVisual(
+                    id: source.object.id,
+                    text: source.object.name,
+                    point: point,
+                    kind: source.object.kind,
+                    selected: source.object.id == selectedObjectID
+                )
+            )
+        }
+
+        let objectVisuals = Array(visuals.dropFirst(cardinalCount))
+        labelOverlayScene.apply(
+            visuals: Array(objectVisuals.prefix(100)),
+            cardinals: Array(visuals.prefix(cardinalCount))
+        )
+        metrics.recordLabelProjection(duration: CACurrentMediaTime() - start)
+    }
+
+    private func overlayPoint(for direction: Vector3D, size: CGSize) -> CGPoint? {
+        overlayPoint(for: direction, size: size, renderer: sceneView)
+    }
+
+    private func overlayPoint(
+        for direction: Vector3D,
+        size: CGSize,
+        renderer: any SCNSceneRenderer
+    ) -> CGPoint? {
+        let point = renderer.projectPoint(
+            SCNVector3(
+                Float(direction.x * StarGeometryFactory.skyRadius),
+                Float(direction.y * StarGeometryFactory.skyRadius),
+                Float(direction.z * StarGeometryFactory.skyRadius)
+            )
+        )
+        guard point.x.isFinite, point.y.isFinite, point.z.isFinite else { return nil }
+        guard point.z >= -0.01, point.z <= 1.01 else { return nil }
+#if os(macOS)
+        let screenPoint = CGPoint(x: CGFloat(point.x), y: CGFloat(point.y))
+#else
+        let screenPoint = CGPoint(x: CGFloat(point.x), y: size.height - CGFloat(point.y))
+#endif
+        guard screenPoint.x >= -24, screenPoint.x <= size.width + 24,
+              screenPoint.y >= -20, screenPoint.y <= size.height + 20 else {
+            return nil
+        }
+        return screenPoint
+    }
+
+    private func vector(azimuth: Double, altitude: Double) -> Vector3D {
+        let az = azimuth * .pi / 180
+        let alt = altitude * .pi / 180
+        let horizontal = cos(alt)
+        return Vector3D(
+            x: horizontal * sin(az),
+            y: sin(alt),
+            z: -horizontal * cos(az)
+        )
+    }
+
+    private static func isSolarSystem(_ kind: CelestialKind) -> Bool {
+        kind == .sun || kind == .moon || kind == .planet
     }
 
     private static func normalizedDegrees(_ value: Double) -> Double {
         let result = value.truncatingRemainder(dividingBy: 360)
         return result < 0 ? result + 360 : result
+    }
+
+    private static func shortestAngleDelta(from start: Double, to end: Double) -> Double {
+        var delta = (end - start).truncatingRemainder(dividingBy: 360)
+        if delta > 180 {
+            delta -= 360
+        } else if delta < -180 {
+            delta += 360
+        }
+        return delta
     }
 }
 
@@ -163,4 +651,49 @@ private struct GeometryKey: Equatable {
     let observer: ObserverContext
     let showConstellations: Bool
     let starScale: CGFloat
+}
+
+private struct LabelSource {
+    let object: CelestialObject
+    let j2000Direction: Vector3D?
+}
+
+private struct LabelSourceKey: Equatable {
+    let selectedObjectID: String?
+    let magnitudeLimit: Double
+    let objectCount: Int
+}
+
+private extension CelestialKind {
+    var labelPriority: Int {
+        switch self {
+        case .sun: 0
+        case .moon: 1
+        case .planet: 2
+        case .star: 3
+        case .deepSky: 4
+        case .constellation: 5
+        }
+    }
+}
+
+private func slerp(_ lhs: Vector3D, _ rhs: Vector3D, _ progress: Float) -> Vector3D? {
+    let a = SIMD3<Float>(Float(lhs.x), Float(lhs.y), Float(lhs.z))
+    let b = SIMD3<Float>(Float(rhs.x), Float(rhs.y), Float(rhs.z))
+    let lengthA = simd_length(a)
+    let lengthB = simd_length(b)
+    guard lengthA > 0, lengthB > 0 else { return nil }
+    let dotValue = max(-1, min(1, simd_dot(a / lengthA, b / lengthB)))
+    if dotValue > 0.9995 {
+        let linear = a / lengthA + (b / lengthB - a / lengthA) * progress
+        guard simd_length(linear) > 0 else { return nil }
+        let result = linear / simd_length(linear)
+        return Vector3D(x: Double(result.x), y: Double(result.y), z: Double(result.z))
+    }
+    let theta = acos(dotValue)
+    let sinTheta = sin(theta)
+    let first = sin((1 - progress) * theta) / sinTheta
+    let second = sin(progress * theta) / sinTheta
+    let result = (a / lengthA) * first + (b / lengthB) * second
+    return Vector3D(x: Double(result.x), y: Double(result.y), z: Double(result.z)).normalized
 }

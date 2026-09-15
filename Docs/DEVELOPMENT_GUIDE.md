@@ -136,16 +136,27 @@ SkyViewModel + ObserverContext + SkyMoment
 AstronomyService / HorizontalTransform
         │
         ▼
-SkySnapshot
-├── positions
-├── constellationSegments
-└── recommendations
+SkySnapshot / SkySceneCatalog
         │
-        ├── SkySceneController
-        └── SkyProjection / SkyLabelsView
+        ▼
+SkySceneController
+├── 静态 J2000 恒星与星座根节点
+├── Sun / Moon / 行星动态节点
+├── 60 Hz 四元数与位置插值
+└── SpriteKit overlay 标签层
 ```
 
-`SkySnapshot` 是同一次渲染的唯一事实来源。星座线、标签、控制台检查器和拾取都不得自行重复计算赤道坐标。
+`SkySnapshot` 是检查器、观测计划和搜索的唯一数据来源。渲染层使用同一份
+`SkySceneCatalog` 构建静态星空，并在每一帧只旋转一个根节点；星座线、标签、
+拾取和选择环共用同一条无折射相机矩阵，避免低空折射差异造成像素错位。
+
+### 60 FPS 渲染约定
+
+- 恒星、深空天体与星座线只在目录或星点缩放变化时重建几何
+- 时间播放每 250 ms 请求一个后台快照，SceneKit 在渲染帧之间插值
+- SwiftUI 只接收手势结束后的相机状态，不参与每帧标签定位
+- 标签最多 100 个，使用固定 `SKLabelNode` 池并仅在文本变化时重建纹理
+- `SkyFrameMetrics` 记录 P95/P99、连续慢帧、几何重建和标签投影耗时；真机最终以 Instruments 的 Animation Hitches 与 Time Profiler 为准
 
 ## 8. iOS 与 iPadOS 界面
 

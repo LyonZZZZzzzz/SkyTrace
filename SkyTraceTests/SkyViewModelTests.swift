@@ -14,10 +14,11 @@ final class SkyViewModelTests: XCTestCase {
         XCTAssertLessThanOrEqual(viewModel.snapshot.recommendations.count, 6)
     }
 
-    func testTimeTravelUpdatesSnapshotMoment() {
+    func testTimeTravelUpdatesSnapshotMoment() async {
         let viewModel = SkyViewModel()
         let originalDate = viewModel.moment.date
         viewModel.shiftTime(by: 3_600)
+        await viewModel.waitForSnapshotUpdate()
 
         XCTAssertEqual(viewModel.moment.date.timeIntervalSince(originalDate), 3_600, accuracy: 0.1)
         XCTAssertEqual(viewModel.snapshot.moment.date, viewModel.moment.date)

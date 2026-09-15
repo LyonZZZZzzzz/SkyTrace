@@ -7,6 +7,7 @@ public enum SkyTraceDiagnostics {
     public static let catalog = Logger(subsystem: subsystem, category: "Catalog")
     public static let snapshot = Logger(subsystem: subsystem, category: "Snapshot")
     public static let planning = Logger(subsystem: subsystem, category: "ObservationPlanning")
+    public static let frames = Logger(subsystem: subsystem, category: "Frames")
     public static let notifications = Logger(subsystem: subsystem, category: "Notifications")
 
     private static let signposter = OSSignposter(subsystem: subsystem, category: "Performance")

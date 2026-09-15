@@ -5,6 +5,20 @@ All notable changes to SkyTrace are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Reworked the SceneKit star map around a static J2000 catalog root, dynamic solar-system nodes, 4 Hz background snapshots and 60 Hz render interpolation
+- Moved camera gestures and device-motion smoothing into the shared render controller so SwiftUI is no longer updated for every touch or sensor sample
+- Replaced the full SwiftUI label projection layer with a fixed-size SpriteKit overlay of at most 100 labels plus cardinal markers
+- Added bounded frame metrics for FPS, P95/P99 frame time, slow-frame runs, geometry rebuilds, dynamic-node updates and label projection time
+
+### Fixed
+
+- Fixed SceneKit renderer callback isolation on its private display-link queue by coalescing frame updates onto the main actor
+- Kept render, picking, selection and labels on the same unrefracted camera transform while details and plans retain atmospheric refraction
+
 ## [1.2.0] - 2026-09-15
 
 ### Added

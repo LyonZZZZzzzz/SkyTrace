@@ -5,10 +5,15 @@ import UIKit
 
 struct SkySceneView: UIViewRepresentable {
     let snapshot: SkySnapshot
+    let catalog: SkySceneCatalog?
     let camera: SkyCameraState
     let selectedObjectID: String?
     let showConstellations: Bool
     let starScale: Double
+    let labelMagnitudeLimit: Double
+    let showCardinals: Bool
+    let motionEnabled: Bool
+    let motionReading: SkyMotionReading?
 
     let onCameraChange: (SkyCameraState) -> Void
     let onTap: (String?) -> Void
@@ -33,13 +38,14 @@ struct SkySceneView: UIViewRepresentable {
     @MainActor
     final class Coordinator: NSObject {
         var parent: SkySceneView
-        let controller = SkySceneController()
+        var controller: SkySceneController!
         private var panStartCamera = SkyCameraState()
         private var pinchStartFieldOfView = 70.0
         private var rotationStartRoll = 0.0
 
         init(parent: SkySceneView) {
             self.parent = parent
+            controller = SkySceneController(catalog: parent.catalog)
             panStartCamera = parent.camera
             pinchStartFieldOfView = parent.camera.fieldOfView
             rotationStartRoll = parent.camera.roll
@@ -51,7 +57,23 @@ struct SkySceneView: UIViewRepresentable {
                 showConstellations: parent.showConstellations,
                 starScale: parent.starScale
             )
-            controller.updateCamera(parent.camera, selectedObjectID: parent.selectedObjectID)
+            controller.updateLabels(
+                magnitudeLimit: parent.labelMagnitudeLimit,
+                showCardinals: parent.showCardinals
+            )
+            controller.setMotionReading(
+                parent.motionEnabled && !controller.isUserInteracting ? parent.motionReading : nil
+            )
+            if !controller.isUserInteracting {
+                controller.updateCamera(parent.camera, selectedObjectID: parent.selectedObjectID, notify: false)
+            } else {
+                controller.updateCamera(
+                    controller.currentCameraState,
+                    selectedObjectID: parent.selectedObjectID,
+                    notify: false
+                )
+            }
+            controller.onCameraChange = parent.onCameraChange
         }
 
         func installGestures(on view: SCNView) {
@@ -78,7 +100,9 @@ struct SkySceneView: UIViewRepresentable {
             guard let view = gesture.view else { return }
             switch gesture.state {
             case .began:
-                panStartCamera = parent.camera
+                controller.setMotionReading(nil)
+                controller.isUserInteracting = true
+                panStartCamera = controller.currentCameraState
             case .changed:
                 let translation = gesture.translation(in: view)
                 var state = panStartCamera
@@ -86,7 +110,9 @@ struct SkySceneView: UIViewRepresentable {
                 let verticalScale = state.fieldOfView / max(Double(view.bounds.height), 1)
                 state.azimuth = Self.normalizedDegrees(state.azimuth - Double(translation.x) * horizontalScale)
                 state.altitude = min(89, max(-89, state.altitude + Double(translation.y) * verticalScale))
-                parent.onCameraChange(state)
+                controller.updateCamera(state, selectedObjectID: parent.selectedObjectID, notify: false)
+            case .ended, .cancelled, .failed:
+                finishInteraction()
             default:
                 break
             }
@@ -95,11 +121,15 @@ struct SkySceneView: UIViewRepresentable {
         @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
             switch gesture.state {
             case .began:
-                pinchStartFieldOfView = parent.camera.fieldOfView
+                controller.setMotionReading(nil)
+                controller.isUserInteracting = true
+                pinchStartFieldOfView = controller.currentCameraState.fieldOfView
             case .changed:
-                var state = parent.camera
+                var state = controller.currentCameraState
                 state.fieldOfView = min(110, max(20, pinchStartFieldOfView / Double(gesture.scale)))
-                parent.onCameraChange(state)
+                controller.updateCamera(state, selectedObjectID: parent.selectedObjectID, notify: false)
+            case .ended, .cancelled, .failed:
+                finishInteraction()
             default:
                 break
             }
@@ -108,11 +138,15 @@ struct SkySceneView: UIViewRepresentable {
         @objc private func handleRotation(_ gesture: UIRotationGestureRecognizer) {
             switch gesture.state {
             case .began:
-                rotationStartRoll = parent.camera.roll
+                controller.setMotionReading(nil)
+                controller.isUserInteracting = true
+                rotationStartRoll = controller.currentCameraState.roll
             case .changed:
-                var state = parent.camera
+                var state = controller.currentCameraState
                 state.roll = Self.normalizedDegrees(rotationStartRoll + Double(gesture.rotation) * 180 / .pi)
-                parent.onCameraChange(state)
+                controller.updateCamera(state, selectedObjectID: parent.selectedObjectID, notify: false)
+            case .ended, .cancelled, .failed:
+                finishInteraction()
             default:
                 break
             }
@@ -125,6 +159,11 @@ struct SkySceneView: UIViewRepresentable {
 
         @objc private func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
             parent.onReset()
+        }
+
+        private func finishInteraction() {
+            controller.isUserInteracting = false
+            parent.onCameraChange(controller.currentCameraState)
         }
 
         private static func normalizedDegrees(_ value: Double) -> Double {

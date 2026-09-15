@@ -16,6 +16,7 @@ public final class SkyViewModel {
     public var observer: ObserverContext
     public var moment: SkyMoment
     public var snapshot: SkySnapshot = .empty
+    public private(set) var sceneCatalog: SkySceneCatalog?
 
     public var selectedObjectID: String?
     public var searchQuery = ""
@@ -53,7 +54,13 @@ public final class SkyViewModel {
     @ObservationIgnored private let eventPlanner: any AstronomyEventPlanning
     @ObservationIgnored private let astronomy: any AstronomyCalculating
     @ObservationIgnored private let planner: any ObservationPlanning
+    @ObservationIgnored private let snapshotWorker = SkySnapshotWorker()
     @ObservationIgnored private var playbackTask: Task<Void, Never>?
+    @ObservationIgnored private var snapshotTask: Task<Void, Never>?
+    @ObservationIgnored private var snapshotBuildInFlight = false
+    @ObservationIgnored private var snapshotGeneration: UInt64 = 0
+    @ObservationIgnored private var pendingSnapshotRefresh: Bool?
+    @ObservationIgnored private var snapshotWaiters: [CheckedContinuation<Void, Never>] = []
     @ObservationIgnored private var toastTask: Task<Void, Never>?
     @ObservationIgnored private var planTask: Task<Void, Never>?
     @ObservationIgnored private var eventTask: Task<Void, Never>?
@@ -99,11 +106,17 @@ public final class SkyViewModel {
 
         if let catalog {
             repository = catalog
+            sceneCatalog = SkySceneCatalog(objects: catalog.allObjects, constellations: catalog.constellations)
             catalogState = .ready
             refreshSnapshot()
         } else {
             do {
-                repository = try CatalogRepository()
+                let loadedCatalog = try CatalogRepository()
+                repository = loadedCatalog
+                sceneCatalog = SkySceneCatalog(
+                    objects: loadedCatalog.allObjects,
+                    constellations: loadedCatalog.constellations
+                )
                 catalogState = .ready
                 refreshSnapshot()
             } catch {
@@ -126,6 +139,7 @@ public final class SkyViewModel {
 
     deinit {
         playbackTask?.cancel()
+        snapshotTask?.cancel()
         toastTask?.cancel()
         planTask?.cancel()
         eventTask?.cancel()
@@ -317,85 +331,81 @@ public final class SkyViewModel {
 
     public func refreshSnapshot(updateObservationPlan: Bool = true) {
         guard let repository else { return }
-        SkyTraceDiagnostics.event("SnapshotBuildStarted")
-        defer { SkyTraceDiagnostics.event("SnapshotBuildCompleted") }
-        let transform = astronomy.horizontalTransform(for: moment, observer: observer)
-
-        var segments: [ConstellationSegment] = []
-        var anchorWeightedSums: [String: Vector3D] = [:]
-        var anchorWeights: [String: Double] = [:]
-
-        for constellation in repository.constellations {
-            for line in constellation.segments {
-                guard line.count > 1 else { continue }
-                for index in 1..<line.count {
-                    let start = line[index - 1]
-                    let end = line[index]
-                    guard start.count >= 2, end.count >= 2 else { continue }
-
-                    let startHorizontal = transform.horizontal(raDegrees: start[0], decDegrees: start[1])
-                    let endHorizontal = transform.horizontal(raDegrees: end[0], decDegrees: end[1])
-                    let startVector = vector(azimuth: startHorizontal.azimuth, altitude: startHorizontal.altitude)
-                    let endVector = vector(azimuth: endHorizontal.azimuth, altitude: endHorizontal.altitude)
-                    segments.append(
-                        ConstellationSegment(
-                            constellationID: constellation.id,
-                            start: startVector,
-                            end: endVector
-                        )
-                    )
-
-                    let segmentLength = (endVector - startVector).length
-                    guard segmentLength > 0 else { continue }
-                    let midpoint = (startVector + endVector) * 0.5
-                    anchorWeightedSums[constellation.id] = (anchorWeightedSums[constellation.id] ?? Vector3D(x: 0, y: 0, z: 0)) + midpoint * segmentLength
-                    anchorWeights[constellation.id, default: 0] += segmentLength
-                }
-            }
-        }
-
-        var positions: [SkyPosition] = []
-        positions.reserveCapacity(repository.allObjects.count)
-        for object in repository.allObjects {
-            let coordinate: (azimuth: Double, altitude: Double)
-
-            if
-                let constellationID = constellationID(for: object),
-                let weightedSum = anchorWeightedSums[constellationID],
-                let weight = anchorWeights[constellationID],
-                weight > 0
-            {
-                let anchor = weightedSum.normalized
-                coordinate = (
-                    azimuth: normalizedDegrees(atan2(anchor.x, -anchor.z) * 180 / .pi),
-                    altitude: asin(min(1, max(-1, anchor.y))) * 180 / .pi
-                )
-            } else {
-                coordinate = astronomy.horizontal(
-                    object: object,
-                    moment: moment,
-                    observer: observer,
-                    transform: transform
-                )
-            }
-
-            positions.append(
-                SkyPosition(
-                    object: object,
-                    azimuth: coordinate.azimuth,
-                    altitude: coordinate.altitude
-                )
-            )
-        }
-
-        let recommendations = Array(bestRecommendations(from: positions).prefix(6))
-        snapshot = SkySnapshot(
-            observer: observer,
+        snapshotGeneration &+= 1
+        snapshotTask?.cancel()
+        let nextSnapshot = SkySnapshotBuilder.makeSnapshot(
+            objects: repository.allObjects,
+            constellations: repository.constellations,
             moment: moment,
-            positions: positions,
-            constellationSegments: segments,
-            recommendations: recommendations
+            observer: observer,
+            astronomy: astronomy
         )
+        applySnapshot(nextSnapshot, updateObservationPlan: updateObservationPlan)
+    }
+
+    private func scheduleSnapshotRefresh(updateObservationPlan: Bool) {
+        guard repository != nil else { return }
+        snapshotGeneration &+= 1
+        pendingSnapshotRefresh = (pendingSnapshotRefresh ?? false) || updateObservationPlan
+        guard !snapshotBuildInFlight else { return }
+        startNextSnapshotBuild()
+    }
+
+    private func startNextSnapshotBuild() {
+        guard
+            let repository,
+            let updateObservationPlan = pendingSnapshotRefresh
+        else {
+            resumeSnapshotWaitersIfIdle()
+            return
+        }
+
+        pendingSnapshotRefresh = nil
+        snapshotBuildInFlight = true
+        let generation = snapshotGeneration
+        let objects = repository.allObjects
+        let constellations = repository.constellations
+        let moment = moment
+        let observer = observer
+        let astronomy = astronomy
+        let worker = snapshotWorker
+
+        snapshotTask = Task { [weak self] in
+            let nextSnapshot = await worker.makeSnapshot(
+                objects: objects,
+                constellations: constellations,
+                moment: moment,
+                observer: observer,
+                astronomy: astronomy
+            )
+            guard let self else { return }
+            self.snapshotBuildInFlight = false
+            if !Task.isCancelled,
+               generation == self.snapshotGeneration,
+               self.moment == moment,
+               self.observer == observer {
+                self.applySnapshot(nextSnapshot, updateObservationPlan: updateObservationPlan)
+            }
+            self.startNextSnapshotBuild()
+        }
+    }
+
+    private func resumeSnapshotWaitersIfIdle() {
+        guard !snapshotBuildInFlight, pendingSnapshotRefresh == nil else { return }
+        let waiters = snapshotWaiters
+        snapshotWaiters.removeAll(keepingCapacity: true)
+        waiters.forEach { $0.resume() }
+    }
+
+    public func waitForSnapshotUpdate() async {
+        guard snapshotBuildInFlight || pendingSnapshotRefresh != nil else { return }
+        await withCheckedContinuation { continuation in
+            snapshotWaiters.append(continuation)
+        }
+    }
+
+    private func applySnapshot(_ nextSnapshot: SkySnapshot, updateObservationPlan: Bool) {
+        snapshot = nextSnapshot
         if updateObservationPlan {
             scheduleObservationPlanRefresh()
             scheduleAstronomyEventRefresh()
@@ -404,9 +414,12 @@ public final class SkyViewModel {
 
     public func setDate(_ date: Date, recenter: Bool = false) {
         moment = SkyMoment(date: min(max(date, dateRange.lowerBound), dateRange.upperBound))
-        refreshSnapshot()
+        scheduleSnapshotRefresh(updateObservationPlan: true)
         if recenter, let id = selectedObjectID {
-            center(on: id)
+            Task { [weak self] in
+                await self?.waitForSnapshotUpdate()
+                self?.center(on: id)
+            }
         }
     }
 
@@ -486,13 +499,13 @@ public final class SkyViewModel {
             timeZoneIdentifier: TimeZone.current.identifier
         )
         Self.saveObserver(observer)
-        refreshSnapshot()
+        scheduleSnapshotRefresh(updateObservationPlan: true)
     }
 
     public func setObserver(_ observer: ObserverContext) {
         self.observer = observer
         Self.saveObserver(observer)
-        refreshSnapshot()
+        scheduleSnapshotRefresh(updateObservationPlan: true)
     }
 
     public func showToast(_ message: String) {
@@ -577,7 +590,10 @@ public final class SkyViewModel {
     public func focus(on event: AstronomyEvent) {
         setDate(event.date, recenter: false)
         if let objectID = event.objectIDs.first {
-            center(on: objectID)
+            Task { [weak self] in
+                await self?.waitForSnapshotUpdate()
+                self?.center(on: objectID)
+            }
         }
     }
 
@@ -611,26 +627,10 @@ public final class SkyViewModel {
 
         motionService.onReading = { [weak self] reading in
             self?.motionReading = reading
-            guard let self, self.motionEnabled else { return }
-            self.camera.azimuth = reading.azimuth
-            self.camera.altitude = reading.altitude
-            self.camera.roll = reading.roll
         }
         motionService.onErrorMessage = { [weak self] message in
             self?.showToast(message)
         }
-    }
-
-    private func constellationID(for object: CelestialObject) -> String? {
-        guard object.kind == .constellation else { return nil }
-        let prefix = "constellation-"
-        guard object.id.hasPrefix(prefix) else { return nil }
-        return String(object.id.dropFirst(prefix.count))
-    }
-
-    private func normalizedDegrees(_ value: Double) -> Double {
-        let result = value.truncatingRemainder(dividingBy: 360)
-        return result < 0 ? result + 360 : result
     }
 
     private func startPlayback() {
@@ -644,10 +644,7 @@ public final class SkyViewModel {
                 if self.moment.date > self.dateRange.upperBound {
                     self.moment = SkyMoment(date: self.dateRange.lowerBound)
                 }
-                self.refreshSnapshot(updateObservationPlan: false)
-                if let id = self.selectedObjectID {
-                    self.center(on: id)
-                }
+                self.scheduleSnapshotRefresh(updateObservationPlan: false)
             }
         }
     }
@@ -657,40 +654,6 @@ public final class SkyViewModel {
         playbackTask = nil
         isPlaying = false
         scheduleObservationPlanRefresh()
-    }
-
-    private func vector(azimuth: Double, altitude: Double) -> Vector3D {
-        SkyPosition(
-            object: Self.placeholderObject,
-            azimuth: azimuth,
-            altitude: altitude
-        ).horizontalVector
-    }
-
-    private func bestRecommendations(from positions: [SkyPosition]) -> [SkyPosition] {
-        positions
-            .filter { position in
-                guard position.object.kind != .constellation, position.object.kind != .sun else { return false }
-                return position.altitude >= 12
-            }
-            .sorted { lhs, rhs in
-                recommendationScore(lhs) > recommendationScore(rhs)
-            }
-    }
-
-    private func recommendationScore(_ position: SkyPosition) -> Double {
-        let priority: Double
-        switch position.object.kind {
-        case .moon: priority = 65
-        case .planet: priority = 60
-        case .deepSky: priority = 45
-        case .star: priority = 35
-        case .constellation: priority = 0
-        case .sun: priority = -100
-        }
-        let magnitudeBonus = max(0, 7 - (position.object.magnitude ?? 7)) * 1.5
-        let altitudeBonus = min(position.altitude, 70) * 0.25
-        return priority + magnitudeBonus + altitudeBonus
     }
 
     private static func loadObserver() -> ObserverContext? {
@@ -708,17 +671,4 @@ public final class SkyViewModel {
         return result < 0 ? result + 360 : result
     }
 
-    private static let placeholderObject = CelestialObject(
-        id: "placeholder",
-        name: "",
-        englishName: "",
-        designation: "",
-        kind: .star,
-        raDegrees: 0,
-        decDegrees: 0,
-        magnitude: nil,
-        bvColorIndex: nil,
-        detail: "",
-        aliases: []
-    )
 }

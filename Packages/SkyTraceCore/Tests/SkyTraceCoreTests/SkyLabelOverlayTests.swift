@@ -210,14 +210,53 @@ final class SkyLabelOverlayTests: XCTestCase {
         XCTAssertEqual(scene.styleMutationCount, styleMutationCount)
     }
 
+    func testEligibilityPolicyUsesRelaxedBoundsForRetainedLabels() {
+        let size = CGSize(width: 800, height: 600)
+        let edgePoint = CGPoint(x: 850, y: 300)
+
+        XCTAssertFalse(
+            SkyLabelEligibilityPolicy.isPointEligible(edgePoint, size: size, wasIncluded: false)
+        )
+        XCTAssertTrue(
+            SkyLabelEligibilityPolicy.isPointEligible(edgePoint, size: size, wasIncluded: true)
+        )
+        XCTAssertFalse(SkyLabelEligibilityPolicy.isDepthEligible(0, wasIncluded: false))
+        XCTAssertTrue(SkyLabelEligibilityPolicy.isDepthEligible(0, wasIncluded: true))
+        XCTAssertFalse(SkyLabelEligibilityPolicy.isDepthEligible(-0.1, wasIncluded: true))
+    }
+
+    func testPendingTextUpdatesClearAfterAllTexturesAreReady() {
+        let scene = SkyLabelOverlayScene(size: CGSize(width: 800, height: 600))
+        let visuals = (0..<10).map {
+            visual(
+                id: "object-\($0)",
+                text: "名称\($0)",
+                point: CGPoint(x: $0 * 50 + 50, y: 300),
+                kind: .star
+            )
+        }
+
+        scene.apply(visuals: visuals, cardinals: [])
+        XCTAssertTrue(scene.hasPendingTextUpdates)
+
+        scene.apply(visuals: visuals, cardinals: [])
+        XCTAssertTrue(scene.hasPendingTextUpdates)
+
+        scene.apply(visuals: visuals, cardinals: [])
+        XCTAssertFalse(scene.hasPendingTextUpdates)
+    }
+
     func testPrewarmQueueProcessesAtMostFourTextsPerFrame() {
         let scene = SkyLabelOverlayScene(size: CGSize(width: 800, height: 600))
         scene.queuePrewarm(texts: ["一", "二", "三", "四", "五", "六"])
 
+        XCTAssertTrue(scene.hasPendingTextUpdates)
         scene.apply(visuals: [], cardinals: [])
         XCTAssertEqual(scene.lastTextUpdateCount, 4)
+        XCTAssertTrue(scene.hasPendingTextUpdates)
         scene.apply(visuals: [], cardinals: [])
         XCTAssertLessThanOrEqual(scene.lastTextUpdateCount, 2)
+        XCTAssertFalse(scene.hasPendingTextUpdates)
     }
 
     private func visual(

@@ -20,3 +20,4 @@ SkyTrace/Info.plist
 *.profdata
 SkyTraceMac/Info.plist
 build-device-tests/
+build-ios/

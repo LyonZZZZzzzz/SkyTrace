@@ -45,6 +45,7 @@ final class SkyLabelOverlayScene: SKScene {
     private(set) var styleMutationCount = 0
     private(set) var displayedObjectIDs: Set<String> = []
     private(set) var displayedCardinalIDs: Set<String> = []
+    private var pendingVisibleTextIDs: Set<String> = []
     private let maximumObjectNodes = 100
     private let maximumTextUpdatesPerFrame = 4
     private let showHorizontalPadding: CGFloat = 6
@@ -52,6 +53,10 @@ final class SkyLabelOverlayScene: SKScene {
     private let stickyHorizontalInset: CGFloat = 2
     private let stickyVerticalInset: CGFloat = 1
     private let positionQuantum: CGFloat = 0.25
+
+    var hasPendingTextUpdates: Bool {
+        !pendingVisibleTextIDs.isEmpty || prewarmIndex < prewarmTexts.count
+    }
 
     override init(size: CGSize) {
         super.init(size: size)
@@ -101,6 +106,7 @@ final class SkyLabelOverlayScene: SKScene {
         let previouslyDisplayedCardinalIDs = displayedCardinalIDs
         var textUpdates = 0
         var assignedObjectIDs = Set<String>()
+        var nextPendingVisibleTextIDs = Set<String>()
         var preparedLabels: [PreparedObjectLabel] = []
         preparedLabels.reserveCapacity(min(visuals.count, maximumObjectNodes))
 
@@ -112,6 +118,7 @@ final class SkyLabelOverlayScene: SKScene {
 
             if node.text != visual.text {
                 guard textUpdates < maximumTextUpdatesPerFrame else {
+                    nextPendingVisibleTextIDs.insert(visual.id)
                     preparedLabels.append(
                         PreparedObjectLabel(visual: visual, nodeIndex: index, textReady: false)
                     )
@@ -210,6 +217,7 @@ final class SkyLabelOverlayScene: SKScene {
             prewarmIndex += 1
             textUpdates += 1
         }
+        pendingVisibleTextIDs = nextPendingVisibleTextIDs
         lastTextUpdateCount = textUpdates
     }
 

@@ -398,6 +398,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     var debugLabelProjectionRecomputeCount: Int { labelProjectionRecomputeCount }
     var debugLabelSourceRevision: Int { labelSourceRevision }
     var debugLabelSourceObjectIDs: [String] { labelSources.map(\.object.id) }
+    var debugHasPendingLabelTextUpdates: Bool { labelOverlayScene.hasPendingTextUpdates }
 
     func debugRefreshContinuousRenderingMode() {
         updateContinuousRenderingMode()
@@ -452,6 +453,12 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
 #endif
     }
 
+    private var needsLabelTextWarmup: Bool {
+        sceneView.bounds.width > 0 &&
+            sceneView.bounds.height > 0 &&
+            labelOverlayScene.hasPendingTextUpdates
+    }
+
     private func wakeRendering() {
         guard isApplicationActive && isViewVisible else { return }
         if renderingSuspended {
@@ -459,7 +466,8 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
             renderingSuspended = false
         }
         frameUpdateLock.withLock { $0.isEnabled = true }
-        sceneView.rendersContinuously = renderPolicy.usesContinuousRendering
+        sceneView.rendersContinuously = renderPolicy.usesContinuousRendering ||
+            needsLabelTextWarmup
         sceneView.isPlaying = true
         requestSceneDisplay()
     }
@@ -503,13 +511,20 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
             sceneView.rendersContinuously = true
             sceneView.isPlaying = true
         case .idleWarm:
-            frameUpdateLock.withLock { $0.isEnabled = false }
-            sceneView.rendersContinuously = false
-            sceneView.isPlaying = false
-            if !thermalConstrained && !lowPower {
-                scheduleKeepAlive()
-            } else {
+            if needsLabelTextWarmup {
                 cancelKeepAlive()
+                frameUpdateLock.withLock { $0.isEnabled = true }
+                sceneView.rendersContinuously = true
+                sceneView.isPlaying = true
+            } else {
+                frameUpdateLock.withLock { $0.isEnabled = false }
+                sceneView.rendersContinuously = false
+                sceneView.isPlaying = false
+                if !thermalConstrained && !lowPower {
+                    scheduleKeepAlive()
+                } else {
+                    cancelKeepAlive()
+                }
             }
             requestSceneDisplay()
         case .suspended:
@@ -820,12 +835,19 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         }
 
         let cardinalCount = visuals.count
+        let previousObjectIDs = Set(cachedObjectVisuals.map(\.id))
         let forward = cameraMotion.basis.forward
         for source in labelSources {
             guard visuals.count < 100 + cardinalCount else { break }
             guard let direction = displayVector(for: source.object.id) else { continue }
-            guard Vector3D.dot(direction, forward) > 0.02 else { continue }
-            guard let point = overlayPoint(for: direction, size: size) else { continue }
+            let wasIncluded = previousObjectIDs.contains(source.object.id)
+            let depth = Vector3D.dot(direction, forward)
+            guard SkyLabelEligibilityPolicy.isDepthEligible(depth, wasIncluded: wasIncluded) else { continue }
+            guard let point = overlayPoint(
+                for: direction,
+                size: size,
+                wasIncluded: wasIncluded
+            ) else { continue }
             visuals.append(
                 SkyLabelVisual(
                     id: source.object.id,
@@ -848,14 +870,24 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         metrics.recordLabelProjection(duration: CACurrentMediaTime() - start)
     }
 
-    private func overlayPoint(for direction: Vector3D, size: CGSize) -> CGPoint? {
-        overlayPoint(for: direction, size: size, renderer: sceneView)
+    private func overlayPoint(
+        for direction: Vector3D,
+        size: CGSize,
+        wasIncluded: Bool = false
+    ) -> CGPoint? {
+        overlayPoint(
+            for: direction,
+            size: size,
+            renderer: sceneView,
+            wasIncluded: wasIncluded
+        )
     }
 
     private func overlayPoint(
         for direction: Vector3D,
         size: CGSize,
-        renderer: any SCNSceneRenderer
+        renderer: any SCNSceneRenderer,
+        wasIncluded: Bool = false
     ) -> CGPoint? {
         let point = renderer.projectPoint(
             SCNVector3(
@@ -871,10 +903,11 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
 #else
         let screenPoint = CGPoint(x: CGFloat(point.x), y: size.height - CGFloat(point.y))
 #endif
-        guard screenPoint.x >= -24, screenPoint.x <= size.width + 24,
-              screenPoint.y >= -20, screenPoint.y <= size.height + 20 else {
-            return nil
-        }
+        guard SkyLabelEligibilityPolicy.isPointEligible(
+            screenPoint,
+            size: size,
+            wasIncluded: wasIncluded
+        ) else { return nil }
         return screenPoint
     }
 

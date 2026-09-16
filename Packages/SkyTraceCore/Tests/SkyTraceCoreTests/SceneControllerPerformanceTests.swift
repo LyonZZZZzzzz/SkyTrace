@@ -170,6 +170,29 @@ final class SceneControllerPerformanceTests: XCTestCase {
         XCTAssertFalse(controller.debugKeepAliveScheduled)
     }
 
+    func testPendingLabelTexturesKeepRenderingUntilWarmupCompletes() {
+        let controller = SkySceneController(catalog: makeCatalog())
+        controller.sceneView.frame = CGRect(x: 0, y: 0, width: 800, height: 600)
+        controller.setApplicationActive(true, isVisible: true)
+        controller.updateLabels(magnitudeLimit: 4.2, showCardinals: false)
+        controller.debugRefreshContinuousRenderingMode()
+
+        XCTAssertTrue(controller.debugHasPendingLabelTextUpdates)
+        XCTAssertTrue(controller.debugRendersContinuously)
+        XCTAssertTrue(controller.debugRenderingEnabled)
+        XCTAssertFalse(controller.debugKeepAliveScheduled)
+
+        for _ in 0..<4 {
+            controller.debugRefreshLabels()
+        }
+        controller.debugRefreshContinuousRenderingMode()
+
+        XCTAssertFalse(controller.debugHasPendingLabelTextUpdates)
+        XCTAssertFalse(controller.debugRendersContinuously)
+        XCTAssertFalse(controller.debugRenderingEnabled)
+        XCTAssertTrue(controller.debugKeepAliveScheduled)
+    }
+
     func testLabelProjectionCacheSkipsUnchangedFrames() {
         let controller = SkySceneController(catalog: makeCatalog())
         controller.sceneView.frame = CGRect(x: 0, y: 0, width: 800, height: 600)

@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">SkyTrace macOS Dock Icon</title>
+  <desc id="desc">A transparent macOS app icon canvas with a rounded square containing the SkyTrace star trace mark.</desc>
+  <defs>
+    <clipPath id="dock-clip"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
+    <linearGradient id="dock-edge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.22"/>
+      <stop offset="0.22" stop-color="#FFFFFF" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#02060E"/>
+  <g clip-path="url(#dock-clip)">
+    <svg x="100" y="100" width="824" height="824" viewBox="0 0 1024 1024" preserveAspectRatio="none">
+<defs>
+    <radialGradient id="sky" cx="72%" cy="27%" r="91%">
+      <stop offset="0" stop-color="#0E1A33"/>
+      <stop offset="0.5" stop-color="#07152A"/>
+      <stop offset="1" stop-color="#02060E"/>
+    </radialGradient>
+    <linearGradient id="trail" gradientUnits="userSpaceOnUse" x1="250" y1="790" x2="742" y2="300">
+      <stop offset="0" stop-color="#40D1FA" stop-opacity="0.72"/>
+      <stop offset="0.62" stop-color="#40D1FA"/>
+      <stop offset="1" stop-color="#D6FAFF"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#sky)"/>
+  <path d="M 337 827 C 473 679 597 543 751 309 L 705 269 C 555 481 421 630 215 733 Z"
+        fill="url(#trail)"/>
+  <circle cx="276" cy="769" r="34" fill="#C9F8FF"/>
+  <path d="M 730 194 C 740 268 776 306 850 318 C 777 330 741 369 730 443 C 719 369 683 330 610 318 C 683 306 719 268 730 194 Z"
+        fill="#40D1FA"/>
+
+    </svg>
+    <rect x="102" y="102" width="820" height="820" rx="183" fill="none" stroke="url(#dock-edge)" stroke-width="4"/>
+  </g>
+</svg>

@@ -5,6 +5,14 @@ All notable changes to SkyTrace are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project follows [Semantic Versioning](https://semver.org/).
 
+## [1.2.6] - 2026-09-16
+
+### Fixed
+
+- Restored SceneKit-native projection for production labels so star positions and label positions remain aligned during rotation and zoom
+- Kept the 0.25-point label position deadband to prevent sub-pixel text jitter after zooming stops
+- Made collision checks use the stabilized label position instead of the raw projected point
+
 ## [1.2.5] - 2026-09-16
 
 ### Fixed

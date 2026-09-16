@@ -177,7 +177,7 @@ final class SkyLabelOverlayScene: SKScene {
             let collision = collisionFrames(
                 for: node,
                 cachedSize: cardinalNodeSizes[index],
-                center: visual.point
+                center: node.position
             )
             let candidateFrame = wasVisible ? collision.sticky : collision.show
             let occupiedFrames = wasVisible ? occupiedStickyFrames : occupiedShowFrames
@@ -225,7 +225,7 @@ final class SkyLabelOverlayScene: SKScene {
         let collision = collisionFrames(
             for: node,
             cachedSize: objectNodeSizes[label.nodeIndex],
-            center: label.visual.point
+            center: node.position
         )
 
         if !label.visual.selected {

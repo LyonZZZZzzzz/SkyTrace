@@ -794,11 +794,6 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
 
         labelProjectionRecomputeCount += 1
         labelOverlayScene.size = size
-        let projection = SkyProjection(
-            camera: currentCameraState,
-            basis: cameraMotion.basis,
-            size: size
-        )
         var visuals: [SkyLabelVisual] = []
         visuals.reserveCapacity(104)
 
@@ -810,7 +805,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
                 ("西", vector(azimuth: 270, altitude: 0))
             ]
             for (text, direction) in cardinals {
-                if let point = projectedOverlayPoint(for: direction, projection: projection) {
+                if let point = overlayPoint(for: direction, size: size) {
                     visuals.append(
                         SkyLabelVisual(
                             id: "cardinal-\(text)",
@@ -830,7 +825,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
             guard visuals.count < 100 + cardinalCount else { break }
             guard let direction = displayVector(for: source.object.id) else { continue }
             guard Vector3D.dot(direction, forward) > 0.02 else { continue }
-            guard let point = projectedOverlayPoint(for: direction, projection: projection) else { continue }
+            guard let point = overlayPoint(for: direction, size: size) else { continue }
             visuals.append(
                 SkyLabelVisual(
                     id: source.object.id,
@@ -853,16 +848,8 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         metrics.recordLabelProjection(duration: CACurrentMediaTime() - start)
     }
 
-    private func projectedOverlayPoint(
-        for direction: Vector3D,
-        projection: SkyProjection
-    ) -> CGPoint? {
-        guard let point = projection.screenPoint(for: direction) else { return nil }
-        guard point.x >= -24, point.x <= projection.size.width + 24,
-              point.y >= -20, point.y <= projection.size.height + 20 else {
-            return nil
-        }
-        return point
+    private func overlayPoint(for direction: Vector3D, size: CGSize) -> CGPoint? {
+        overlayPoint(for: direction, size: size, renderer: sceneView)
     }
 
     private func overlayPoint(

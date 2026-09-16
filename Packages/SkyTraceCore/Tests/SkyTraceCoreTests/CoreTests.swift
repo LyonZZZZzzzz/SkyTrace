@@ -108,6 +108,35 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(viewModel.moment.date.timeIntervalSince(original), 3_600, accuracy: 0.1)
         XCTAssertEqual(viewModel.snapshot.moment.date, viewModel.moment.date)
     }
+
+    @MainActor
+    func testPlaybackRatesUseDaysPerElapsedSecond() throws {
+        let viewModel = SkyViewModel(catalog: try CatalogRepository())
+        XCTAssertEqual(viewModel.playbackDaysPerSecond, 1.0)
+        let original = viewModel.moment.date
+
+        viewModel.advancePlayback(byElapsedSeconds: 1)
+        XCTAssertEqual(viewModel.moment.date.timeIntervalSince(original), 86_400, accuracy: 0.000_001)
+
+        viewModel.playbackDaysPerSecond = SkyViewModel.realTimePlaybackDaysPerSecond
+        let realtimeStart = viewModel.moment.date
+        viewModel.advancePlayback(byElapsedSeconds: 1)
+        XCTAssertEqual(viewModel.moment.date.timeIntervalSince(realtimeStart), 1, accuracy: 0.000_001)
+
+        viewModel.advancePlayback(byElapsedSeconds: 60)
+        XCTAssertEqual(viewModel.moment.date.timeIntervalSince(realtimeStart), 61, accuracy: 0.000_001)
+    }
+
+    @MainActor
+    func testRealtimePlaybackWrapsAtUpperDateBound() throws {
+        let viewModel = SkyViewModel(catalog: try CatalogRepository())
+        viewModel.playbackDaysPerSecond = SkyViewModel.realTimePlaybackDaysPerSecond
+        viewModel.setDate(viewModel.dateRange.upperBound)
+
+        viewModel.advancePlayback(byElapsedSeconds: 1)
+
+        XCTAssertEqual(viewModel.moment.date, viewModel.dateRange.lowerBound)
+    }
 }
 
 @MainActor

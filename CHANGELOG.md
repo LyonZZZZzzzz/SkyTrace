@@ -5,6 +5,17 @@ All notable changes to SkyTrace are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project follows [Semantic Versioning](https://semver.org/).
 
+## [1.2.10] - 2026-09-16
+
+### Added
+
+- Added a 1 second/second real-time playback option on iOS, iPadOS and macOS
+- Kept playback paused until Play is pressed and retained 1 day/second as the default speed
+
+### Fixed
+
+- Corrected playback speed conversion so day, hour, minute and second modes advance at the rates shown in their labels
+
 ## [1.2.9] - 2026-09-16
 
 ### Changed

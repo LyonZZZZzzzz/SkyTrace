@@ -26,6 +26,7 @@ public final class SkyViewModel {
     public var camera = SkyCameraState()
     public var isPlaying = false
     public var playbackDaysPerSecond = 1.0
+    public static let realTimePlaybackDaysPerSecond = 1.0 / 86_400.0
 
     public private(set) var motionReading: SkyMotionReading?
     public private(set) var locationAuthorization: SkyLocationAuthorizationStatus = .notDetermined
@@ -689,13 +690,17 @@ public final class SkyViewModel {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(250))
                 guard !Task.isCancelled, let self, self.isPlaying else { return }
-                self.moment = SkyMoment(date: self.moment.date.addingTimeInterval(self.playbackDaysPerSecond * 0.25))
-                if self.moment.date > self.dateRange.upperBound {
-                    self.moment = SkyMoment(date: self.dateRange.lowerBound)
-                }
-                self.scheduleSnapshotRefresh(updateObservationPlan: false)
+                self.advancePlayback(byElapsedSeconds: 0.25)
             }
         }
+    }
+
+    func advancePlayback(byElapsedSeconds elapsedSeconds: TimeInterval) {
+        moment = SkyMoment(date: moment.date.addingTimeInterval(playbackDaysPerSecond * elapsedSeconds * 86_400))
+        if moment.date > dateRange.upperBound {
+            moment = SkyMoment(date: dateRange.lowerBound)
+        }
+        scheduleSnapshotRefresh(updateObservationPlan: false)
     }
 
     private func stopPlayback() {

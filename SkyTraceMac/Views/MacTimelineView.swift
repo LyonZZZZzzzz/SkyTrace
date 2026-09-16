@@ -63,6 +63,7 @@ struct MacTimelineView: View {
                 .frame(maxWidth: 210)
 
                 Menu {
+                    Button("1 秒/秒") { viewModel.playbackDaysPerSecond = SkyViewModel.realTimePlaybackDaysPerSecond }
                     Button("1 分钟/秒") { viewModel.playbackDaysPerSecond = 1.0 / 1440 }
                     Button("1 小时/秒") { viewModel.playbackDaysPerSecond = 1.0 / 24 }
                     Button("1 天/秒") { viewModel.playbackDaysPerSecond = 1 }
@@ -89,6 +90,7 @@ struct MacTimelineView: View {
     private var playbackLabel: String {
         if viewModel.playbackDaysPerSecond >= 1 { return "1 天/秒" }
         if viewModel.playbackDaysPerSecond >= 1.0 / 24 { return "1 小时/秒" }
-        return "1 分钟/秒"
+        if viewModel.playbackDaysPerSecond >= 1.0 / 1440 { return "1 分钟/秒" }
+        return "1 秒/秒"
     }
 }

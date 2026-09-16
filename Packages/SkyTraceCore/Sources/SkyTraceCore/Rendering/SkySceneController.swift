@@ -397,6 +397,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     var debugKeepAliveScheduled: Bool { keepAliveTask != nil }
     var debugLabelProjectionRecomputeCount: Int { labelProjectionRecomputeCount }
     var debugLabelSourceRevision: Int { labelSourceRevision }
+    var debugLabelSourceObjectIDs: [String] { labelSources.map(\.object.id) }
 
     func debugRefreshContinuousRenderingMode() {
         updateContinuousRenderingMode()
@@ -763,7 +764,10 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
             let lhsPriority = lhs.object.kind.labelPriority
             let rhsPriority = rhs.object.kind.labelPriority
             if lhsPriority != rhsPriority { return lhsPriority < rhsPriority }
-            return (lhs.object.magnitude ?? 99) < (rhs.object.magnitude ?? 99)
+            let lhsMagnitude = lhs.object.magnitude ?? .infinity
+            let rhsMagnitude = rhs.object.magnitude ?? .infinity
+            if lhsMagnitude != rhsMagnitude { return lhsMagnitude < rhsMagnitude }
+            return lhs.object.id < rhs.object.id
         }
         labelSourceRevision &+= 1
         labelOverlayScene.queuePrewarm(texts: Array(labelSources.prefix(100).map(\.object.name)))
@@ -974,9 +978,9 @@ private extension CelestialKind {
         case .sun: 0
         case .moon: 1
         case .planet: 2
-        case .star: 3
-        case .deepSky: 4
-        case .constellation: 5
+        case .constellation: 3
+        case .star: 4
+        case .deepSky: 5
         }
     }
 }

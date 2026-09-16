@@ -5,6 +5,19 @@ All notable changes to SkyTrace are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project follows [Semantic Versioning](https://semver.org/).
 
+## [1.2.3] - 2026-09-16
+
+### Changed
+
+- Reordered label priority to selected target, solar-system bodies, constellations, bright stars and deep-sky objects
+- Resolved SpriteKit label overlaps in screen space while keeping the existing 100-label cap
+- Cached measured label sizes so collision checks do not repeatedly measure text
+
+### Fixed
+
+- Prevented overlapping star, constellation and deep-sky names when the sky is zoomed out or densely populated
+- Kept the selected target visible while hiding lower-priority labels that overlap it or cardinal markers
+
 ## [1.2.2] - 2026-09-16
 
 ### Changed

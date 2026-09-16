@@ -14,16 +14,29 @@ struct SkyLabelVisual {
 /// opacity.
 @MainActor
 final class SkyLabelOverlayScene: SKScene {
+    private struct PreparedObjectLabel {
+        let visual: SkyLabelVisual
+        let nodeIndex: Int
+        let textReady: Bool
+    }
+
     private var objectNodes: [SKLabelNode] = []
+    private var objectNodeSizes: [CGSize?] = []
     private var activeObjectNodes: [String: Int] = [:]
     private var idleObjectNodeIndices: [Int] = []
     private var cardinalNodes: [SKLabelNode] = []
+    private var cardinalNodeSizes: [CGSize?] = Array(repeating: nil, count: 4)
     private var prewarmNode: SKLabelNode?
     private var prewarmTexts: [String] = []
     private var prewarmIndex = 0
     private(set) var lastTextUpdateCount = 0
+    private(set) var textMeasurementCount = 0
+    private(set) var displayedObjectIDs: Set<String> = []
+    private(set) var displayedCardinalIDs: Set<String> = []
     private let maximumObjectNodes = 100
     private let maximumTextUpdatesPerFrame = 4
+    private let horizontalPadding: CGFloat = 6
+    private let verticalPadding: CGFloat = 4
 
     override init(size: CGSize) {
         super.init(size: size)
@@ -70,37 +83,58 @@ final class SkyLabelOverlayScene: SKScene {
 
     func apply(visuals: [SkyLabelVisual], cardinals: [SkyLabelVisual]) {
         var textUpdates = 0
-        var visibleObjectIDs = Set<String>()
+        var assignedObjectIDs = Set<String>()
+        var preparedLabels: [PreparedObjectLabel] = []
+        preparedLabels.reserveCapacity(min(visuals.count, maximumObjectNodes))
 
         for visual in visuals.prefix(maximumObjectNodes) {
             guard let index = objectNodeIndex(for: visual.id) else { continue }
+            assignedObjectIDs.insert(visual.id)
             let node = objectNodes[index]
-            visibleObjectIDs.insert(visual.id)
+            node.isHidden = true
 
             if node.text != visual.text {
                 guard textUpdates < maximumTextUpdatesPerFrame else {
-                    node.isHidden = true
+                    preparedLabels.append(
+                        PreparedObjectLabel(visual: visual, nodeIndex: index, textReady: false)
+                    )
                     continue
                 }
                 node.text = visual.text
+                objectNodeSizes[index] = nil
                 textUpdates += 1
             }
 
-            node.position = visual.point
             let targetFontSize = visual.selected ? 12 : (visual.kind == .constellation ? 10.5 : 11)
             if abs(node.fontSize - targetFontSize) > 0.01 {
                 node.fontSize = targetFontSize
+                objectNodeSizes[index] = nil
             }
             node.fontColor = color(for: visual)
             node.alpha = visual.selected ? 1 : 0.86
-            node.isHidden = false
+            preparedLabels.append(
+                PreparedObjectLabel(
+                    visual: visual,
+                    nodeIndex: index,
+                    textReady: node.text == visual.text
+                )
+            )
         }
 
-        let inactiveIDs = activeObjectNodes.keys.filter { !visibleObjectIDs.contains($0) }
+        let inactiveIDs = activeObjectNodes.keys.filter { !assignedObjectIDs.contains($0) }
         for id in inactiveIDs {
             guard let index = activeObjectNodes.removeValue(forKey: id) else { continue }
             objectNodes[index].isHidden = true
             idleObjectNodeIndices.append(index)
+        }
+
+        displayedObjectIDs.removeAll(keepingCapacity: true)
+        displayedCardinalIDs.removeAll(keepingCapacity: true)
+        var occupiedFrames: [CGRect] = []
+        occupiedFrames.reserveCapacity(preparedLabels.count + cardinals.count)
+
+        for label in preparedLabels where label.textReady && label.visual.selected {
+            placeObjectLabel(label, occupiedFrames: &occupiedFrames)
         }
 
         for (index, node) in cardinalNodes.enumerated() {
@@ -116,9 +150,27 @@ final class SkyLabelOverlayScene: SKScene {
                     continue
                 }
                 node.text = visual.text
+                cardinalNodeSizes[index] = nil
                 textUpdates += 1
             }
+
+            let collision = collisionFrame(
+                for: node,
+                cachedSize: cardinalNodeSizes[index],
+                center: visual.point
+            )
+            guard !occupiedFrames.contains(where: { $0.intersects(collision.frame) }) else {
+                node.isHidden = true
+                continue
+            }
+            cardinalNodeSizes[index] = collision.size
+            occupiedFrames.append(collision.frame)
+            displayedCardinalIDs.insert(visual.id)
             node.isHidden = false
+        }
+
+        for label in preparedLabels where label.textReady && !label.visual.selected {
+            placeObjectLabel(label, occupiedFrames: &occupiedFrames)
         }
 
         while textUpdates < maximumTextUpdatesPerFrame, prewarmIndex < prewarmTexts.count {
@@ -127,6 +179,57 @@ final class SkyLabelOverlayScene: SKScene {
             textUpdates += 1
         }
         lastTextUpdateCount = textUpdates
+    }
+
+    private func placeObjectLabel(
+        _ label: PreparedObjectLabel,
+        occupiedFrames: inout [CGRect]
+    ) {
+        let node = objectNodes[label.nodeIndex]
+        node.position = label.visual.point
+        let collision = collisionFrame(
+            for: node,
+            cachedSize: objectNodeSizes[label.nodeIndex],
+            center: label.visual.point
+        )
+
+        if !label.visual.selected {
+            guard !occupiedFrames.contains(where: { $0.intersects(collision.frame) }) else {
+                node.isHidden = true
+                return
+            }
+        }
+
+        objectNodeSizes[label.nodeIndex] = collision.size
+        occupiedFrames.append(collision.frame)
+        displayedObjectIDs.insert(label.visual.id)
+        node.isHidden = false
+    }
+
+    private func collisionFrame(
+        for node: SKLabelNode,
+        cachedSize: CGSize?,
+        center: CGPoint
+    ) -> (frame: CGRect, size: CGSize) {
+        let size: CGSize
+        if let cachedSize {
+            size = cachedSize
+        } else {
+            textMeasurementCount += 1
+            let measured = node.calculateAccumulatedFrame()
+            size = CGSize(
+                width: max(measured.width, node.fontSize),
+                height: max(measured.height, node.fontSize)
+            )
+        }
+        let frame = CGRect(
+            x: center.x - size.width * 0.5,
+            y: center.y - size.height * 0.5,
+            width: size.width,
+            height: size.height
+        )
+        .insetBy(dx: -horizontalPadding, dy: -verticalPadding)
+        return (frame, size)
     }
 
     private func objectNodeIndex(for objectID: String) -> Int? {
@@ -147,6 +250,7 @@ final class SkyLabelOverlayScene: SKScene {
         node.zPosition = 2
         addChild(node)
         objectNodes.append(node)
+        objectNodeSizes.append(nil)
         let index = objectNodes.count - 1
         activeObjectNodes[objectID] = index
         return index

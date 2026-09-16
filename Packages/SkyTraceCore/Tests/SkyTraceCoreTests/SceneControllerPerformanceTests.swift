@@ -195,6 +195,17 @@ final class SceneControllerPerformanceTests: XCTestCase {
         XCTAssertGreaterThan(controller.debugLabelSourceRevision, revision)
     }
 
+    func testLabelPriorityIsStableAcrossKindsAndMagnitudes() {
+        let controller = SkySceneController(catalog: makeLabelPriorityCatalog())
+        controller.updateCamera(SkyCameraState(), selectedObjectID: "star-a")
+        controller.updateLabels(magnitudeLimit: 4.2, showCardinals: false)
+
+        XCTAssertEqual(
+            controller.debugLabelSourceObjectIDs,
+            ["star-a", "sun", "moon", "planet", "constellation-test", "star-b", "deepsky-1"]
+        )
+    }
+
     func testOverlayProjectionMatchesSceneKitViewCoordinates() throws {
         let controller = SkySceneController(catalog: makeCatalog())
         let size = CGSize(width: 800, height: 600)
@@ -230,6 +241,26 @@ final class SceneControllerPerformanceTests: XCTestCase {
         return SkySceneCatalog(
             objects: [star, deepSky, sun],
             constellations: [constellation]
+        )
+    }
+
+    private func makeLabelPriorityCatalog() -> SkySceneCatalog {
+        let selectedStar = makeObject(id: "star-a", kind: .star, ra: 35, dec: 12, magnitude: 2)
+        let peerStar = makeObject(id: "star-b", kind: .star, ra: 36, dec: 12, magnitude: 2)
+        let constellation = makeObject(
+            id: "constellation-test",
+            kind: .constellation,
+            ra: 10,
+            dec: 5,
+            magnitude: nil
+        )
+        let deepSky = makeObject(id: "deepsky-1", kind: .deepSky, ra: 210, dec: -25, magnitude: 4.4)
+        let sun = makeObject(id: "sun", kind: .sun, ra: 0, dec: 0, magnitude: -26.7)
+        let moon = makeObject(id: "moon", kind: .moon, ra: 15, dec: 5, magnitude: -12.7)
+        let planet = makeObject(id: "planet", kind: .planet, ra: 25, dec: 8, magnitude: -2)
+        return SkySceneCatalog(
+            objects: [deepSky, peerStar, constellation, planet, moon, sun, selectedStar],
+            constellations: []
         )
     }
 

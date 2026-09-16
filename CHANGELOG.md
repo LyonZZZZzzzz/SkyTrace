@@ -5,6 +5,14 @@ All notable changes to SkyTrace are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project follows [Semantic Versioning](https://semver.org/).
 
+## [1.2.7] - 2026-09-16
+
+### Fixed
+
+- Stopped star-name glyph flicker caused by repeatedly assigning unchanged `SKLabelNode` font colors and opacity
+- Added per-node label style caching so font texture properties are only touched when selection or object style changes
+- Kept position, visibility, collision and SceneKit-aligned projection updates unchanged
+
 ## [1.2.6] - 2026-09-16
 
 ### Fixed

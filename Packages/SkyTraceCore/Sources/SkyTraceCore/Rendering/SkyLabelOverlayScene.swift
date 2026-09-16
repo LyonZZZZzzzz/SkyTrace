@@ -14,6 +14,14 @@ struct SkyLabelVisual {
 /// opacity.
 @MainActor
 final class SkyLabelOverlayScene: SKScene {
+    private enum LabelStyle: Equatable {
+        case selected
+        case constellation
+        case deepSky
+        case solarSystem
+        case star
+    }
+
     private struct PreparedObjectLabel {
         let visual: SkyLabelVisual
         let nodeIndex: Int
@@ -23,6 +31,7 @@ final class SkyLabelOverlayScene: SKScene {
     private var objectNodes: [SKLabelNode] = []
     private var objectNodeSizes: [CGSize?] = []
     private var objectNodeHasPosition: [Bool] = []
+    private var objectNodeStyles: [LabelStyle?] = []
     private var activeObjectNodes: [String: Int] = [:]
     private var idleObjectNodeIndices: [Int] = []
     private var cardinalNodes: [SKLabelNode] = []
@@ -33,6 +42,7 @@ final class SkyLabelOverlayScene: SKScene {
     private var prewarmIndex = 0
     private(set) var lastTextUpdateCount = 0
     private(set) var textMeasurementCount = 0
+    private(set) var styleMutationCount = 0
     private(set) var displayedObjectIDs: Set<String> = []
     private(set) var displayedCardinalIDs: Set<String> = []
     private let maximumObjectNodes = 100
@@ -112,13 +122,7 @@ final class SkyLabelOverlayScene: SKScene {
                 textUpdates += 1
             }
 
-            let targetFontSize = visual.selected ? 12 : (visual.kind == .constellation ? 10.5 : 11)
-            if abs(node.fontSize - targetFontSize) > 0.01 {
-                node.fontSize = targetFontSize
-                objectNodeSizes[index] = nil
-            }
-            node.fontColor = color(for: visual)
-            node.alpha = visual.selected ? 1 : 0.86
+            applyStyleIfNeeded(Self.style(for: visual), to: index)
             preparedLabels.append(
                 PreparedObjectLabel(
                     visual: visual,
@@ -244,6 +248,50 @@ final class SkyLabelOverlayScene: SKScene {
         node.isHidden = false
     }
 
+    private func applyStyleIfNeeded(_ style: LabelStyle, to index: Int) {
+        guard objectNodeStyles[index] != style else { return }
+        let node = objectNodes[index]
+        switch style {
+        case .selected:
+            node.fontSize = 12
+            node.fontColor = SKColor(red: 1, green: 0.60, blue: 0.22, alpha: 1)
+            node.alpha = 1
+        case .constellation:
+            node.fontSize = 10.5
+            node.fontColor = SKColor(red: 0.25, green: 0.82, blue: 0.98, alpha: 0.82)
+            node.alpha = 0.86
+        case .deepSky:
+            node.fontSize = 11
+            node.fontColor = SKColor(red: 0.35, green: 0.92, blue: 0.76, alpha: 0.90)
+            node.alpha = 0.86
+        case .solarSystem:
+            node.fontSize = 11
+            node.fontColor = .white
+            node.alpha = 0.86
+        case .star:
+            node.fontSize = 11
+            node.fontColor = SKColor(white: 1, alpha: 0.88)
+            node.alpha = 0.86
+        }
+        objectNodeStyles[index] = style
+        objectNodeSizes[index] = nil
+        styleMutationCount += 1
+    }
+
+    private static func style(for visual: SkyLabelVisual) -> LabelStyle {
+        if visual.selected { return .selected }
+        switch visual.kind {
+        case .constellation:
+            return .constellation
+        case .deepSky:
+            return .deepSky
+        case .sun, .moon, .planet:
+            return .solarSystem
+        case .star:
+            return .star
+        }
+    }
+
     private func collisionFrames(
         for node: SKLabelNode,
         cachedSize: CGSize?,
@@ -310,24 +358,13 @@ final class SkyLabelOverlayScene: SKScene {
         objectNodes.append(node)
         objectNodeSizes.append(nil)
         objectNodeHasPosition.append(false)
+        objectNodeStyles.append(nil)
         let index = objectNodes.count - 1
         activeObjectNodes[objectID] = index
         return index
     }
 
-    private func color(for visual: SkyLabelVisual) -> SKColor {
-        if visual.selected {
-            return SKColor(red: 1, green: 0.60, blue: 0.22, alpha: 1)
-        }
-        switch visual.kind {
-        case .constellation:
-            return SKColor(red: 0.25, green: 0.82, blue: 0.98, alpha: 0.82)
-        case .deepSky:
-            return SKColor(red: 0.35, green: 0.92, blue: 0.76, alpha: 0.90)
-        case .planet, .sun, .moon:
-            return .white
-        case .star:
-            return SKColor(white: 1, alpha: 0.88)
-        }
+    func debugStyleMutationCount() -> Int {
+        styleMutationCount
     }
 }

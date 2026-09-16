@@ -142,6 +142,74 @@ final class SkyLabelOverlayTests: XCTestCase {
         XCTAssertEqual(scene.displayedObjectIDs, Set(["a", "b"]))
     }
 
+    func testRepeatedApplyDoesNotMutateLabelStyles() {
+        let scene = SkyLabelOverlayScene(size: CGSize(width: 800, height: 600))
+        let visuals = [
+            visual(id: "star", text: "恒星", point: CGPoint(x: 200, y: 200), kind: .star),
+            visual(id: "constellation", text: "星座", point: CGPoint(x: 400, y: 200), kind: .constellation),
+            visual(id: "deep-sky", text: "星云", point: CGPoint(x: 600, y: 200), kind: .deepSky),
+            visual(id: "planet", text: "行星", point: CGPoint(x: 400, y: 400), kind: .planet)
+        ]
+
+        scene.apply(visuals: visuals, cardinals: [])
+        let styleMutationCount = scene.styleMutationCount
+        scene.apply(visuals: visuals, cardinals: [])
+        scene.apply(visuals: Array(visuals.reversed()), cardinals: [])
+
+        XCTAssertGreaterThan(styleMutationCount, 0)
+        XCTAssertEqual(scene.styleMutationCount, styleMutationCount)
+    }
+
+    func testSelectedStyleChangeMutatesOnlySelectedNode() {
+        let scene = SkyLabelOverlayScene(size: CGSize(width: 800, height: 600))
+        let star = visual(id: "star", text: "恒星", point: CGPoint(x: 200, y: 200), kind: .star)
+        let planet = visual(id: "planet", text: "行星", point: CGPoint(x: 500, y: 200), kind: .planet)
+
+        scene.apply(visuals: [star, planet], cardinals: [])
+        let styleMutationCount = scene.styleMutationCount
+
+        scene.apply(
+            visuals: [
+                visual(id: "star", text: "恒星", point: CGPoint(x: 200, y: 200), kind: .star, selected: true),
+                planet
+            ],
+            cardinals: []
+        )
+
+        XCTAssertEqual(scene.styleMutationCount, styleMutationCount + 1)
+    }
+
+    func testPositionOnlyUpdatesDoNotMutateStyles() {
+        let scene = SkyLabelOverlayScene(size: CGSize(width: 2000, height: 2000))
+        let visuals = (0..<100).map { index in
+            visual(
+                id: "object-\(index)",
+                text: "测试",
+                point: CGPoint(x: CGFloat(index % 10) * 150 + 100, y: CGFloat(index / 10) * 150 + 100),
+                kind: .star
+            )
+        }
+
+        for _ in 0..<25 {
+            scene.apply(visuals: visuals, cardinals: [])
+        }
+        let styleMutationCount = scene.styleMutationCount
+        XCTAssertEqual(styleMutationCount, 100)
+
+        let moved = visuals.map { item in
+            visual(
+                id: item.id,
+                text: item.text,
+                point: CGPoint(x: item.point.x + 0.5, y: item.point.y + 0.5),
+                kind: item.kind,
+                selected: item.selected
+            )
+        }
+        scene.apply(visuals: moved, cardinals: [])
+
+        XCTAssertEqual(scene.styleMutationCount, styleMutationCount)
+    }
+
     func testPrewarmQueueProcessesAtMostFourTextsPerFrame() {
         let scene = SkyLabelOverlayScene(size: CGSize(width: 800, height: 600))
         scene.queuePrewarm(texts: ["一", "二", "三", "四", "五", "六"])

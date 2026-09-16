@@ -22,6 +22,23 @@ final class SkyFrameMetricsTests: XCTestCase {
         XCTAssertEqual(metrics.measuredFrameCount, intervals.count)
     }
 
+    func testRingBufferKeepsNewestSamplesInOrder() {
+        var metrics = SkyFrameMetrics(sampleCapacity: 3)
+        let values: [Double] = [0.01, 0.02, 0.03, 0.04, 0.05]
+        var timestamp = 0.0
+        metrics.recordFrame(at: timestamp)
+        for value in values {
+            timestamp += value
+            metrics.recordFrame(at: timestamp)
+        }
+
+        let intervals = metrics.frameIntervals
+        XCTAssertEqual(intervals.count, 3)
+        XCTAssertEqual(intervals[0], 0.03, accuracy: 0.000_001)
+        XCTAssertEqual(intervals[1], 0.04, accuracy: 0.000_001)
+        XCTAssertEqual(intervals[2], 0.05, accuracy: 0.000_001)
+    }
+
     func testResetSamplingExcludesBackgroundGapButKeepsCounters() {
         var metrics = SkyFrameMetrics()
         metrics.recordGeometryRebuild()

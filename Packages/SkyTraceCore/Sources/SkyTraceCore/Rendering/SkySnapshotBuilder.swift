@@ -94,6 +94,9 @@ public enum SkySnapshotBuilder {
             observer: observer,
             moment: moment,
             positions: positions,
+            dynamicPositions: positions.filter {
+                $0.object.kind == .sun || $0.object.kind == .moon || $0.object.kind == .planet
+            },
             constellationSegments: segments,
             recommendations: Array(bestRecommendations(from: positions).prefix(6))
         )

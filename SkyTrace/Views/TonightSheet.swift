@@ -36,5 +36,6 @@ struct TonightSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+        .task { viewModel.ensureTonightDataLoaded() }
     }
 }

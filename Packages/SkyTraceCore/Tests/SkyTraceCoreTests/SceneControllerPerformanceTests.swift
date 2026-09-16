@@ -91,7 +91,8 @@ final class SceneControllerPerformanceTests: XCTestCase {
 
     func testLifecyclePausesAndWakesRendering() {
         let controller = SkySceneController(catalog: makeCatalog())
-        XCTAssertTrue(controller.debugRendersContinuously)
+        controller.debugRefreshContinuousRenderingMode()
+        XCTAssertFalse(controller.debugRendersContinuously)
 
         controller.setApplicationActive(false, isVisible: false)
         XCTAssertFalse(controller.debugRendersContinuously)
@@ -99,10 +100,9 @@ final class SceneControllerPerformanceTests: XCTestCase {
         XCTAssertFalse(controller.debugRenderingEnabled)
 
         controller.setApplicationActive(true, isVisible: true)
-        XCTAssertTrue(controller.debugRendersContinuously)
-        XCTAssertTrue(controller.debugSceneIsPlaying)
-
         controller.debugRefreshContinuousRenderingMode()
+        XCTAssertFalse(controller.debugRendersContinuously)
+
         XCTAssertFalse(controller.debugRendersContinuously)
         XCTAssertFalse(controller.debugRenderingEnabled)
 
@@ -133,11 +133,66 @@ final class SceneControllerPerformanceTests: XCTestCase {
         XCTAssertFalse(controller.debugRendersContinuously)
 
         controller.update(
+            snapshot: makeSnapshot(date: startDate),
+            showConstellations: true,
+            starScale: 1
+        )
+        controller.debugRefreshContinuousRenderingMode()
+        controller.update(
             snapshot: makeSnapshot(date: startDate.addingTimeInterval(3_600)),
             showConstellations: true,
             starScale: 1
         )
         XCTAssertTrue(controller.debugRendersContinuously)
+    }
+
+    func testRenderPolicySwitchesBetweenIdleWarmAndInteraction() {
+        let controller = SkySceneController(catalog: makeCatalog())
+        controller.setApplicationActive(true, isVisible: true)
+        controller.debugRefreshContinuousRenderingMode()
+
+        XCTAssertEqual(controller.debugRenderPolicy, .idleWarm)
+        XCTAssertTrue(controller.debugKeepAliveScheduled)
+
+        controller.beginCameraInteraction()
+        controller.debugRefreshContinuousRenderingMode()
+        XCTAssertEqual(controller.debugRenderPolicy, .interactive)
+        XCTAssertFalse(controller.debugKeepAliveScheduled)
+
+        controller.endCameraInteraction(
+            horizontalVelocity: 0,
+            verticalVelocity: 0,
+            rollVelocity: 0,
+            viewportSize: CGSize(width: 1_000, height: 700)
+        )
+        controller.setApplicationActive(false, isVisible: false)
+        XCTAssertEqual(controller.debugRenderPolicy, .suspended)
+        XCTAssertFalse(controller.debugKeepAliveScheduled)
+    }
+
+    func testLabelProjectionCacheSkipsUnchangedFrames() {
+        let controller = SkySceneController(catalog: makeCatalog())
+        controller.sceneView.frame = CGRect(x: 0, y: 0, width: 800, height: 600)
+        controller.updateCamera(SkyCameraState(), selectedObjectID: nil)
+
+        controller.debugRefreshLabels()
+        let firstCount = controller.debugLabelProjectionRecomputeCount
+        controller.debugRefreshLabels()
+
+        XCTAssertEqual(controller.debugLabelProjectionRecomputeCount, firstCount)
+    }
+
+    func testUnchangedLabelSettingsDoNotRebuildLabelSources() {
+        let controller = SkySceneController(catalog: makeCatalog())
+        controller.updateLabels(magnitudeLimit: 4.2, showCardinals: true)
+        let revision = controller.debugLabelSourceRevision
+
+        controller.updateLabels(magnitudeLimit: 4.2, showCardinals: true)
+
+        XCTAssertEqual(controller.debugLabelSourceRevision, revision)
+
+        controller.updateLabels(magnitudeLimit: 4.4, showCardinals: true)
+        XCTAssertGreaterThan(controller.debugLabelSourceRevision, revision)
     }
 
     func testOverlayProjectionMatchesSceneKitViewCoordinates() throws {

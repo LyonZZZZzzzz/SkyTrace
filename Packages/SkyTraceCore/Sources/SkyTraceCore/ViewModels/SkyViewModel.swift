@@ -66,6 +66,7 @@ public final class SkyViewModel {
     @ObservationIgnored private var eventTask: Task<Void, Never>?
     @ObservationIgnored private var applicationIsActive = true
     @ObservationIgnored private var resumePlaybackAfterForeground = false
+    @ObservationIgnored private var tonightDataRequested = false
 
     public convenience init() {
         self.init(
@@ -110,7 +111,7 @@ public final class SkyViewModel {
             repository = catalog
             sceneCatalog = SkySceneCatalog(objects: catalog.allObjects, constellations: catalog.constellations)
             catalogState = .ready
-            refreshSnapshot()
+            refreshSnapshot(updateObservationPlan: false)
         } else {
             do {
                 let loadedCatalog = try CatalogRepository()
@@ -120,7 +121,7 @@ public final class SkyViewModel {
                     constellations: loadedCatalog.constellations
                 )
                 catalogState = .ready
-                refreshSnapshot()
+                refreshSnapshot(updateObservationPlan: false)
             } catch {
                 catalogState = .failed(error.localizedDescription)
             }
@@ -135,7 +136,6 @@ public final class SkyViewModel {
             await self.reminderScheduler.refreshAuthorizationStatus()
             self.reminderAuthorization = self.reminderScheduler.authorizationStatus
             await self.loadObservationLogs()
-            self.scheduleObservationPlanRefresh()
         }
     }
 
@@ -246,7 +246,7 @@ public final class SkyViewModel {
         if !enabled {
             reminderScheduler.removeReminder(objectID: object.id)
         }
-        scheduleObservationPlanRefresh()
+        refreshPlanIfTonightDataRequested()
     }
 
     public func toggleReminder(for object: CelestialObject) async {
@@ -276,6 +276,7 @@ public final class SkyViewModel {
 
         favoriteStore.remindersEnabled = true
         favoriteStore.setReminder(true, for: object.id)
+        tonightDataRequested = true
         scheduleObservationPlanRefresh()
     }
 
@@ -299,6 +300,7 @@ public final class SkyViewModel {
             return
         }
         favoriteStore.remindersEnabled = true
+        tonightDataRequested = true
         scheduleObservationPlanRefresh()
     }
 
@@ -408,10 +410,29 @@ public final class SkyViewModel {
 
     private func applySnapshot(_ nextSnapshot: SkySnapshot, updateObservationPlan: Bool) {
         snapshot = nextSnapshot
-        if updateObservationPlan {
+        refreshTonightDataIfRequested(forced: updateObservationPlan)
+    }
+
+    public func ensureTonightDataLoaded() {
+        tonightDataRequested = true
+        if observationPlan == nil, observationPlanState != .loading {
             scheduleObservationPlanRefresh()
+        }
+        if astronomyEventState != .loading, astronomyEventState != .ready {
             scheduleAstronomyEventRefresh()
         }
+    }
+
+    private func refreshTonightDataIfRequested(forced: Bool) {
+        guard forced, tonightDataRequested || favoriteStore.remindersEnabled else { return }
+        scheduleObservationPlanRefresh()
+        scheduleAstronomyEventRefresh()
+    }
+
+    private func refreshPlanIfTonightDataRequested() {
+        guard tonightDataRequested || favoriteStore.remindersEnabled else { return }
+        tonightDataRequested = true
+        scheduleObservationPlanRefresh()
     }
 
     public func setDate(_ date: Date, recenter: Bool = false) {
@@ -681,7 +702,7 @@ public final class SkyViewModel {
         playbackTask?.cancel()
         playbackTask = nil
         isPlaying = false
-        scheduleObservationPlanRefresh()
+        refreshPlanIfTonightDataRequested()
     }
 
     private static func loadObserver() -> ObserverContext? {

@@ -35,5 +35,6 @@ struct MacTonightSheet: View {
             }
         }
         .frame(minWidth: 700, minHeight: 620)
+        .task { viewModel.ensureTonightDataLoaded() }
     }
 }

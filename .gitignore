@@ -19,3 +19,4 @@ SkyTrace/Info.plist
 *.profraw
 *.profdata
 SkyTraceMac/Info.plist
+build-device-tests/

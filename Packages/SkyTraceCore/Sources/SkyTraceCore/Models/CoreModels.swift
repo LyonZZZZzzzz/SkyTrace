@@ -216,6 +216,7 @@ public struct SkySnapshot: Equatable, Sendable {
     public let observer: ObserverContext
     public let moment: SkyMoment
     public let positions: [SkyPosition]
+    public let dynamicPositions: [SkyPosition]
     public let constellationSegments: [ConstellationSegment]
     public let recommendations: [SkyPosition]
 
@@ -223,12 +224,16 @@ public struct SkySnapshot: Equatable, Sendable {
         observer: ObserverContext,
         moment: SkyMoment,
         positions: [SkyPosition],
+        dynamicPositions: [SkyPosition]? = nil,
         constellationSegments: [ConstellationSegment],
         recommendations: [SkyPosition]
     ) {
         self.observer = observer
         self.moment = moment
         self.positions = positions
+        self.dynamicPositions = dynamicPositions ?? positions.filter {
+            $0.object.kind == .sun || $0.object.kind == .moon || $0.object.kind == .planet
+        }
         self.constellationSegments = constellationSegments
         self.recommendations = recommendations
     }
@@ -237,6 +242,7 @@ public struct SkySnapshot: Equatable, Sendable {
         observer: .shanghai,
         moment: .now,
         positions: [],
+        dynamicPositions: [],
         constellationSegments: [],
         recommendations: []
     )

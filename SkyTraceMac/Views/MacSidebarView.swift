@@ -17,9 +17,17 @@ struct MacSidebarView: View {
             }
 
             Section("今晚观测") {
-                ForEach(viewModel.observationPlan?.recommendations ?? []) { visibility in
-                    objectRow(visibility.object)
-                        .tag(visibility.object.id)
+                if let recommendations = viewModel.observationPlan?.recommendations {
+                    ForEach(recommendations) { visibility in
+                        objectRow(visibility.object)
+                            .tag(visibility.object.id)
+                    }
+                } else {
+                    Button("加载今晚与天空事件") {
+                        viewModel.ensureTonightDataLoaded()
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
                 }
             }
 

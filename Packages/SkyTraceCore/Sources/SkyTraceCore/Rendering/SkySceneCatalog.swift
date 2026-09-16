@@ -11,6 +11,8 @@ public struct SkySceneCatalog: Sendable {
     public let staticObjects: [CelestialObject]
     public let constellationObjects: [CelestialObject]
     public let solarSystemObjects: [CelestialObject]
+    public let starsByMagnitude: [CelestialObject]
+    public let deepSkyByMagnitude: [CelestialObject]
     public let segments: [ConstellationSegment]
     public let directionsJ2000: [String: Vector3D]
     public let constellationAnchorsJ2000: [String: Vector3D]
@@ -22,6 +24,12 @@ public struct SkySceneCatalog: Sendable {
         self.solarSystemObjects = objects.filter {
             $0.kind == .sun || $0.kind == .moon || $0.kind == .planet
         }
+        self.starsByMagnitude = objects
+            .filter { $0.kind == .star }
+            .sorted { ($0.magnitude ?? 99) < ($1.magnitude ?? 99) }
+        self.deepSkyByMagnitude = objects
+            .filter { $0.kind == .deepSky }
+            .sorted { ($0.magnitude ?? 99) < ($1.magnitude ?? 99) }
 
         var directions: [String: Vector3D] = [:]
         for object in self.staticObjects {

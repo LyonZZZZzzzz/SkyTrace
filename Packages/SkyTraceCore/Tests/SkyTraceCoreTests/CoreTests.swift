@@ -55,6 +55,24 @@ final class CoreTests: XCTestCase {
     }
 
     @MainActor
+    func testTonightDataLoadsOnlyWhenRequested() throws {
+        let viewModel = SkyViewModel(
+            locationService: CoreLocationService(),
+            motionService: NoopDeviceMotionProvider(),
+            astronomy: AstronomyService(),
+            catalog: try CatalogRepository()
+        )
+
+        XCTAssertNil(viewModel.observationPlan)
+        XCTAssertEqual(viewModel.observationPlanState, .idle)
+        XCTAssertEqual(viewModel.astronomyEventState, .idle)
+
+        viewModel.ensureTonightDataLoaded()
+        XCTAssertEqual(viewModel.observationPlanState, .loading)
+        XCTAssertEqual(viewModel.astronomyEventState, .loading)
+    }
+
+    @MainActor
     func testApplicationLifecyclePausesPlaybackAndMotion() throws {
         let motion = TestMotionProvider()
         let viewModel = SkyViewModel(

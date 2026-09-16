@@ -5,10 +5,18 @@ All notable changes to SkyTrace are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.2.2] - 2026-09-16
 
 ### Changed
 
+- Deferred observation-plan, sky-event and reminder computation until the Tonight/Events UI is requested
+- Added a four-state render policy with 2 Hz idle keepalive frames and thermal/low-power suspension
+- Switched frame telemetry to a fixed-capacity ring buffer
+- Limited SpriteKit label texture creation to four labels per frame and added offscreen font prewarming
+- Bound SpriteKit label nodes to stable object IDs so camera rotation no longer rebuilds label textures
+- Added label projection caching so unchanged camera/scene frames skip all `projectPoint` calls
+- Pre-indexed dynamic solar-system positions in the background snapshot and reused magnitude-sorted label candidates
+- Removed the startup main-thread scan and dictionary construction over all 8,404 celestial objects
 - Reworked camera interaction around quaternion orientation with damped following and release inertia
 - SceneKit now pauses completely in the background and switches to on-demand rendering while the foreground scene is idle
 - Time playback and CoreMotion pause in the background and resume from the previous state when the app returns
@@ -20,6 +28,7 @@ and the project follows [Semantic Versioning](https://semver.org/).
 - Prevented long background sessions from leaving the GPU active and causing sustained frame-rate loss after foregrounding
 - Excluded background gaps from foreground frame-time samples so P95/P99 recover immediately after resume
 - Kept SceneKit rendering, SpriteKit labels and picking aligned with the same current quaternion camera basis
+- Reduced post-launch and post-idle first-turn frame hitches caused by SpriteKit label font rebuilding
 
 ## [1.2.1] - 2026-09-15
 

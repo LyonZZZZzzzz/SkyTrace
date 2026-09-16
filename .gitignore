@@ -1,6 +1,7 @@
 .DS_Store
 DerivedData/
 build/
+build-device/
 *.xcuserstate
 xcuserdata/
 SkyTrace.xcodeproj/
@@ -8,7 +9,9 @@ SkyTrace.xcodeproj/
 .vscode/ipch/
 
 .build/
+build-device/
 **/.build/
+build-device/
 SkyTrace/Info.plist
 *.xcresult/
 *.xccheckout

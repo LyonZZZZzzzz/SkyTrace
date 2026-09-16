@@ -246,6 +246,38 @@ final class SkyLabelOverlayTests: XCTestCase {
         XCTAssertFalse(scene.hasPendingTextUpdates)
     }
 
+    func testCapacityPolicyChangesWithFOVHysteresis() {
+        var policy = SkyLabelCapacityPolicy()
+
+        XCTAssertEqual(policy.update(fieldOfView: 20), 100)
+        XCTAssertEqual(policy.update(fieldOfView: 75), 100)
+        XCTAssertEqual(policy.update(fieldOfView: 76), 90)
+        XCTAssertEqual(policy.update(fieldOfView: 90), 90)
+        XCTAssertEqual(policy.update(fieldOfView: 91), 80)
+        XCTAssertEqual(policy.update(fieldOfView: 86), 80)
+        XCTAssertEqual(policy.update(fieldOfView: 84), 90)
+        XCTAssertEqual(policy.update(fieldOfView: 71), 90)
+        XCTAssertEqual(policy.update(fieldOfView: 69), 100)
+    }
+
+    func testCandidateAllocatorPrioritizesMandatoryThenResidentLabels() {
+        let result = SkyLabelCandidateAllocator.ordered(
+            [["selected", "sun"], ["resident-a", "resident-b"], ["new-a"]],
+            capacity: 4
+        )
+
+        XCTAssertEqual(result, ["selected", "sun", "resident-a", "resident-b"])
+    }
+
+    func testCandidateAllocatorDoesNotExceedCapacity() {
+        let result = SkyLabelCandidateAllocator.ordered(
+            [[1, 2], [3, 4], [5, 6]],
+            capacity: 3
+        )
+
+        XCTAssertEqual(result, [1, 2, 3])
+    }
+
     func testPrewarmQueueProcessesAtMostFourTextsPerFrame() {
         let scene = SkyLabelOverlayScene(size: CGSize(width: 800, height: 600))
         scene.queuePrewarm(texts: ["一", "二", "三", "四", "五", "六"])

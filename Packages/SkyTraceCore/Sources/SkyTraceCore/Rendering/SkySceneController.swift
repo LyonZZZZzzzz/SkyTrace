@@ -60,6 +60,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     private var labelSources: [LabelSource] = []
     private var labelSourceKey: LabelSourceKey?
     private var labelSourceRevision = 0
+    private var labelCapacityPolicy = SkyLabelCapacityPolicy()
     private var labelProjectionKey: LabelProjectionKey?
     private var cachedObjectVisuals: [SkyLabelVisual] = []
     private var cachedCardinalVisuals: [SkyLabelVisual] = []
@@ -398,6 +399,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     var debugLabelProjectionRecomputeCount: Int { labelProjectionRecomputeCount }
     var debugLabelSourceRevision: Int { labelSourceRevision }
     var debugLabelSourceObjectIDs: [String] { labelSources.map(\.object.id) }
+    var debugLabelCapacity: Int { labelCapacityPolicy.capacity }
     var debugHasPendingLabelTextUpdates: Bool { labelOverlayScene.hasPendingTextUpdates }
 
     func debugRefreshContinuousRenderingMode() {
@@ -793,13 +795,17 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         let size = sceneView.bounds.size
         guard size.width > 0, size.height > 0 else { return }
 
+        let visibleCapacity = labelCapacityPolicy.update(
+            fieldOfView: currentCameraState.fieldOfView
+        )
         let cacheKey = LabelProjectionKey(
             camera: currentCameraState,
             sceneMatrix: currentSceneMatrix.floatValues,
             size: size,
             selectedObjectID: selectedObjectID,
             showCardinals: showCardinals,
-            labelSourceRevision: labelSourceRevision
+            labelSourceRevision: labelSourceRevision,
+            labelCapacity: visibleCapacity
         )
         if cacheKey == labelProjectionKey {
             labelOverlayScene.apply(visuals: cachedObjectVisuals, cardinals: cachedCardinalVisuals)
@@ -809,8 +815,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
 
         labelProjectionRecomputeCount += 1
         labelOverlayScene.size = size
-        var visuals: [SkyLabelVisual] = []
-        visuals.reserveCapacity(104)
+        var cardinalVisuals: [SkyLabelVisual] = []
 
         if showCardinals {
             let cardinals: [(String, Vector3D)] = [
@@ -821,7 +826,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
             ]
             for (text, direction) in cardinals {
                 if let point = overlayPoint(for: direction, size: size) {
-                    visuals.append(
+                    cardinalVisuals.append(
                         SkyLabelVisual(
                             id: "cardinal-\(text)",
                             text: text,
@@ -834,11 +839,13 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
             }
         }
 
-        let cardinalCount = visuals.count
         let previousObjectIDs = Set(cachedObjectVisuals.map(\.id))
         let forward = cameraMotion.basis.forward
+        var mandatory: [SkyLabelVisual] = []
+        var resident: [SkyLabelVisual] = []
+        var newcomers: [SkyLabelVisual] = []
+
         for source in labelSources {
-            guard visuals.count < 100 + cardinalCount else { break }
             guard let direction = displayVector(for: source.object.id) else { continue }
             let wasIncluded = previousObjectIDs.contains(source.object.id)
             let depth = Vector3D.dot(direction, forward)
@@ -848,20 +855,28 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
                 size: size,
                 wasIncluded: wasIncluded
             ) else { continue }
-            visuals.append(
-                SkyLabelVisual(
-                    id: source.object.id,
-                    text: source.object.name,
-                    point: point,
-                    kind: source.object.kind,
-                    selected: source.object.id == selectedObjectID
-                )
+            let visual = SkyLabelVisual(
+                id: source.object.id,
+                text: source.object.name,
+                point: point,
+                kind: source.object.kind,
+                selected: source.object.id == selectedObjectID
             )
+            if Self.isMandatoryLabel(visual, selectedObjectID: selectedObjectID) {
+                mandatory.append(visual)
+            } else if wasIncluded {
+                resident.append(visual)
+            } else {
+                newcomers.append(visual)
+            }
         }
 
-        let objectVisuals = Array(visuals.dropFirst(cardinalCount))
-        cachedObjectVisuals = Array(objectVisuals.prefix(100))
-        cachedCardinalVisuals = Array(visuals.prefix(cardinalCount))
+        let visibleVisuals = SkyLabelCandidateAllocator.ordered(
+            [mandatory, resident, newcomers],
+            capacity: visibleCapacity
+        )
+        cachedObjectVisuals = visibleVisuals
+        cachedCardinalVisuals = cardinalVisuals
         labelProjectionKey = cacheKey
         labelOverlayScene.apply(
             visuals: cachedObjectVisuals,
@@ -926,6 +941,17 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         kind == .sun || kind == .moon || kind == .planet
     }
 
+    private static func isMandatoryLabel(
+        _ visual: SkyLabelVisual,
+        selectedObjectID: String?
+    ) -> Bool {
+        visual.id == selectedObjectID ||
+            visual.kind == .sun ||
+            visual.kind == .moon ||
+            visual.kind == .planet ||
+            visual.kind == .constellation
+    }
+
     private static func shouldShowLabel(for object: CelestialObject, magnitudeLimit: Double) -> Bool {
         switch object.kind {
         case .star:
@@ -970,6 +996,7 @@ private struct LabelProjectionKey: Equatable {
     let selectedObjectID: String?
     let showCardinals: Bool
     let labelSourceRevision: Int
+    let labelCapacity: Int
 }
 
 private extension simd_float3x3 {

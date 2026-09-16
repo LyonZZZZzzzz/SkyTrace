@@ -5,6 +5,14 @@ All notable changes to SkyTrace are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project follows [Semantic Versioning](https://semver.org/).
 
+## [1.2.9] - 2026-09-16
+
+### Changed
+
+- Reduced the visible label budget at wide field-of-view levels to stabilize names during maximum zoom-out rotation
+- Added FOV capacity hysteresis with 100, 90 and 80 label tiers
+- Prioritized previously visible labels over newly eligible non-critical labels when slots are scarce
+
 ## [1.2.8] - 2026-09-16
 
 ### Fixed

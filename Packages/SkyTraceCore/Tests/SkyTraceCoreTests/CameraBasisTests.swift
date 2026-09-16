@@ -115,6 +115,38 @@ final class CameraBasisTests: XCTestCase {
         }
     }
 
+    func testProjectionIsDeterministicForRepeatedCameraState() {
+        let state = SkyCameraState(azimuth: 137, altitude: 42, roll: 23, fieldOfView: 65)
+        let size = CGSize(width: 1200, height: 800)
+        let direction = (state.basis.forward + state.basis.right * 0.08).normalized
+
+        let first = SkyProjection(camera: state, size: size).screenPoint(for: direction)
+        let second = SkyProjection(camera: state, size: size).screenPoint(for: direction)
+
+        XCTAssertEqual(first?.x, second?.x)
+        XCTAssertEqual(first?.y, second?.y)
+    }
+
+    func testProjectionMovesMonotonicallyAsFieldOfViewConverges() {
+        let base = SkyCameraState(azimuth: 137, altitude: 42, roll: 23, fieldOfView: 70)
+        let size = CGSize(width: 1200, height: 800)
+        let direction = (base.basis.forward + base.basis.right * 0.08).normalized
+        let fieldOfViews = stride(from: 70.0, through: 60.0, by: -0.25)
+        var previousX: CGFloat?
+
+        for fieldOfView in fieldOfViews {
+            let state = SkyCameraState(basis: base.basis, fieldOfView: fieldOfView)
+            guard let x = SkyProjection(camera: state, size: size).screenPoint(for: direction)?.x else {
+                XCTFail("projection missing at FOV \(fieldOfView)")
+                return
+            }
+            if let previousX {
+                XCTAssertGreaterThanOrEqual(x, previousX - 0.000_001)
+            }
+            previousX = x
+        }
+    }
+
     func testProjectionUsesSameCameraBasis() {
         let state = SkyCameraState(azimuth: 90, altitude: 35, roll: 17, fieldOfView: 60)
         let projection = SkyProjection(camera: state, size: CGSize(width: 1200, height: 800))

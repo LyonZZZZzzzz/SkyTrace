@@ -22,10 +22,12 @@ final class SkyLabelOverlayScene: SKScene {
 
     private var objectNodes: [SKLabelNode] = []
     private var objectNodeSizes: [CGSize?] = []
+    private var objectNodeHasPosition: [Bool] = []
     private var activeObjectNodes: [String: Int] = [:]
     private var idleObjectNodeIndices: [Int] = []
     private var cardinalNodes: [SKLabelNode] = []
     private var cardinalNodeSizes: [CGSize?] = Array(repeating: nil, count: 4)
+    private var cardinalNodeHasPosition = Array(repeating: false, count: 4)
     private var prewarmNode: SKLabelNode?
     private var prewarmTexts: [String] = []
     private var prewarmIndex = 0
@@ -39,6 +41,7 @@ final class SkyLabelOverlayScene: SKScene {
     private let showVerticalPadding: CGFloat = 4
     private let stickyHorizontalInset: CGFloat = 2
     private let stickyVerticalInset: CGFloat = 1
+    private let positionQuantum: CGFloat = 0.25
 
     override init(size: CGSize) {
         super.init(size: size)
@@ -154,7 +157,12 @@ final class SkyLabelOverlayScene: SKScene {
                 continue
             }
             let visual = cardinals[index]
-            node.position = visual.point
+            node.position = stabilizedPoint(
+                visual.point,
+                current: node.position,
+                hasPosition: cardinalNodeHasPosition[index]
+            )
+            cardinalNodeHasPosition[index] = true
             if node.text != visual.text {
                 guard textUpdates < maximumTextUpdatesPerFrame else {
                     node.isHidden = true
@@ -208,7 +216,12 @@ final class SkyLabelOverlayScene: SKScene {
         occupiedStickyFrames: inout [CGRect]
     ) {
         let node = objectNodes[label.nodeIndex]
-        node.position = label.visual.point
+        node.position = stabilizedPoint(
+            label.visual.point,
+            current: node.position,
+            hasPosition: objectNodeHasPosition[label.nodeIndex]
+        )
+        objectNodeHasPosition[label.nodeIndex] = true
         let collision = collisionFrames(
             for: node,
             cachedSize: objectNodeSizes[label.nodeIndex],
@@ -258,6 +271,25 @@ final class SkyLabelOverlayScene: SKScene {
         return (showFrame, stickyFrame, size)
     }
 
+    private func stabilizedPoint(
+        _ point: CGPoint,
+        current: CGPoint,
+        hasPosition: Bool
+    ) -> CGPoint {
+        let quantized = CGPoint(
+            x: (point.x / positionQuantum).rounded() * positionQuantum,
+            y: (point.y / positionQuantum).rounded() * positionQuantum
+        )
+        guard hasPosition else { return quantized }
+        let distance = hypot(quantized.x - current.x, quantized.y - current.y)
+        return distance < positionQuantum ? current : quantized
+    }
+
+    func debugObjectPoint(for objectID: String) -> CGPoint? {
+        guard let index = activeObjectNodes[objectID] else { return nil }
+        return objectNodes[index].position
+    }
+
     private func objectNodeIndex(for objectID: String) -> Int? {
         if let index = activeObjectNodes[objectID] {
             return index
@@ -277,6 +309,7 @@ final class SkyLabelOverlayScene: SKScene {
         addChild(node)
         objectNodes.append(node)
         objectNodeSizes.append(nil)
+        objectNodeHasPosition.append(false)
         let index = objectNodes.count - 1
         activeObjectNodes[objectID] = index
         return index

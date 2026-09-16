@@ -206,26 +206,33 @@ final class SceneControllerPerformanceTests: XCTestCase {
         )
     }
 
-    func testOverlayProjectionMatchesSceneKitViewCoordinates() throws {
+    func testOverlayProjectionMatchesSceneKitViewCoordinatesAcrossFieldOfView() throws {
         let controller = SkySceneController(catalog: makeCatalog())
         let size = CGSize(width: 800, height: 600)
         controller.sceneView.frame = CGRect(origin: .zero, size: size)
         controller.sceneView.layoutSubtreeIfNeeded()
 
-        let camera = SkyCameraState(azimuth: 137, altitude: 42, roll: 23, fieldOfView: 65)
-        controller.updateCamera(camera, selectedObjectID: nil)
-        let direction = camera.basis.forward
-        controller.sceneView.sceneTime = 0
-        _ = controller.sceneView.snapshot()
+        for fieldOfView in [20.0, 55, 70, 110] {
+            let camera = SkyCameraState(
+                azimuth: 137,
+                altitude: 42,
+                roll: 23,
+                fieldOfView: fieldOfView
+            )
+            controller.updateCamera(camera, selectedObjectID: nil)
+            let direction = (camera.basis.forward + camera.basis.right * 0.06).normalized
+            controller.sceneView.sceneTime = 0
+            _ = controller.sceneView.snapshot()
 
-        let actual = try XCTUnwrap(
-            controller.debugOverlayPoint(for: direction, renderer: controller.sceneView)
-        )
-        let expected = try XCTUnwrap(
-            SkyProjection(camera: camera, size: size).screenPoint(for: direction)
-        )
-        XCTAssertEqual(actual.x, expected.x, accuracy: 1)
-        XCTAssertEqual(actual.y, expected.y, accuracy: 1)
+            let actual = try XCTUnwrap(
+                controller.debugOverlayPoint(for: direction, renderer: controller.sceneView)
+            )
+            let expected = try XCTUnwrap(
+                SkyProjection(camera: camera, size: size).screenPoint(for: direction)
+            )
+            XCTAssertEqual(actual.x, expected.x, accuracy: 1)
+            XCTAssertEqual(actual.y, expected.y, accuracy: 1)
+        }
     }
 
     private func makeCatalog() -> SkySceneCatalog {

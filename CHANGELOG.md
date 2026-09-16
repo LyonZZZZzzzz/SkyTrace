@@ -5,6 +5,14 @@ All notable changes to SkyTrace are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project follows [Semantic Versioning](https://semver.org/).
 
+## [1.2.5] - 2026-09-16
+
+### Fixed
+
+- Stopped sky labels from jittering in place after field-of-view zooming settled
+- Replaced production `SCNView.projectPoint` label projection with the shared deterministic `SkyProjection`
+- Quantized label positions to a 0.25-point grid and ignored sub-pixel movement below that threshold
+
 ## [1.2.4] - 2026-09-16
 
 ### Fixed

@@ -106,6 +106,22 @@ final class SkyLabelOverlayTests: XCTestCase {
         XCTAssertEqual(scene.displayedObjectIDs, Set(["constellation", "star"]))
     }
 
+    func testSubPixelPointChangesDoNotMoveStableLabel() {
+        let scene = SkyLabelOverlayScene(size: CGSize(width: 800, height: 600))
+        let first = visual(id: "star", text: "测试", point: CGPoint(x: 200, y: 200), kind: .star)
+        let tinyChange = visual(id: "star", text: "测试", point: CGPoint(x: 200.1, y: 200.05), kind: .star)
+        let visibleChange = visual(id: "star", text: "测试", point: CGPoint(x: 200.5, y: 200), kind: .star)
+
+        scene.apply(visuals: [first], cardinals: [])
+        let initialPoint = scene.debugObjectPoint(for: "star")
+
+        scene.apply(visuals: [tinyChange], cardinals: [])
+        XCTAssertEqual(scene.debugObjectPoint(for: "star"), initialPoint)
+
+        scene.apply(visuals: [visibleChange], cardinals: [])
+        XCTAssertNotEqual(scene.debugObjectPoint(for: "star"), initialPoint)
+    }
+
     func testVisibilityHysteresisPreventsBoundaryFlicker() {
         let scene = SkyLabelOverlayScene(size: CGSize(width: 800, height: 600))
         let first = visual(id: "a", text: "测试", point: CGPoint(x: 300, y: 300), kind: .star)

@@ -55,6 +55,32 @@ final class CoreTests: XCTestCase {
     }
 
     @MainActor
+    func testApplicationLifecyclePausesPlaybackAndMotion() throws {
+        let motion = TestMotionProvider()
+        let viewModel = SkyViewModel(
+            locationService: CoreLocationService(),
+            motionService: motion,
+            astronomy: AstronomyService(),
+            catalog: try CatalogRepository()
+        )
+        viewModel.motionEnabled = true
+        viewModel.togglePlayback()
+
+        XCTAssertTrue(motion.isActive)
+        XCTAssertTrue(viewModel.isPlaying)
+
+        viewModel.setApplicationActive(false)
+        XCTAssertFalse(motion.isActive)
+        XCTAssertFalse(viewModel.isPlaying)
+
+        viewModel.setApplicationActive(true)
+        XCTAssertTrue(motion.isActive)
+        XCTAssertTrue(viewModel.isPlaying)
+
+        viewModel.togglePlayback()
+    }
+
+    @MainActor
     func testViewModelTimeTravelUsesSharedCore() async throws {
         let viewModel = try XCTUnwrap(SkyViewModel(catalog: try CatalogRepository()) as SkyViewModel?)
         let original = viewModel.moment.date
@@ -63,5 +89,21 @@ final class CoreTests: XCTestCase {
 
         XCTAssertEqual(viewModel.moment.date.timeIntervalSince(original), 3_600, accuracy: 0.1)
         XCTAssertEqual(viewModel.snapshot.moment.date, viewModel.moment.date)
+    }
+}
+
+@MainActor
+private final class TestMotionProvider: DeviceMotionProviding {
+    let isAvailable = true
+    private(set) var isActive = false
+    var onReading: (@MainActor (SkyMotionReading) -> Void)?
+    var onErrorMessage: (@MainActor (String) -> Void)?
+
+    func start() {
+        isActive = true
+    }
+
+    func stop() {
+        isActive = false
     }
 }

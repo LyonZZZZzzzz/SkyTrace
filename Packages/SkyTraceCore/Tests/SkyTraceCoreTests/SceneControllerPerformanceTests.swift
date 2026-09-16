@@ -89,6 +89,57 @@ final class SceneControllerPerformanceTests: XCTestCase {
         XCTAssertNotNil(controller.debugCurrentDynamicVectors["sun"])
     }
 
+    func testLifecyclePausesAndWakesRendering() {
+        let controller = SkySceneController(catalog: makeCatalog())
+        XCTAssertTrue(controller.debugRendersContinuously)
+
+        controller.setApplicationActive(false, isVisible: false)
+        XCTAssertFalse(controller.debugRendersContinuously)
+        XCTAssertFalse(controller.debugSceneIsPlaying)
+        XCTAssertFalse(controller.debugRenderingEnabled)
+
+        controller.setApplicationActive(true, isVisible: true)
+        XCTAssertTrue(controller.debugRendersContinuously)
+        XCTAssertTrue(controller.debugSceneIsPlaying)
+
+        controller.debugRefreshContinuousRenderingMode()
+        XCTAssertFalse(controller.debugRendersContinuously)
+        XCTAssertFalse(controller.debugRenderingEnabled)
+
+        controller.beginCameraInteraction()
+        XCTAssertTrue(controller.debugRendersContinuously)
+        controller.orbit(
+            horizontalDelta: 80,
+            verticalDelta: 20,
+            viewportSize: CGSize(width: 1_200, height: 800),
+            notify: false
+        )
+        controller.endCameraInteraction(
+            horizontalVelocity: 0,
+            verticalVelocity: 0,
+            rollVelocity: 0,
+            viewportSize: CGSize(width: 1_200, height: 800)
+        )
+        for frame in 0..<120 {
+            controller.debugAdvanceAnimation(to: Double(frame) / 60)
+        }
+        controller.debugRefreshContinuousRenderingMode()
+        XCTAssertFalse(controller.debugRendersContinuously)
+
+        controller.setTimePlaybackActive(true)
+        XCTAssertTrue(controller.debugRendersContinuously)
+        controller.setTimePlaybackActive(false)
+        controller.debugRefreshContinuousRenderingMode()
+        XCTAssertFalse(controller.debugRendersContinuously)
+
+        controller.update(
+            snapshot: makeSnapshot(date: startDate.addingTimeInterval(3_600)),
+            showConstellations: true,
+            starScale: 1
+        )
+        XCTAssertTrue(controller.debugRendersContinuously)
+    }
+
     func testOverlayProjectionMatchesSceneKitViewCoordinates() throws {
         let controller = SkySceneController(catalog: makeCatalog())
         let size = CGSize(width: 800, height: 600)

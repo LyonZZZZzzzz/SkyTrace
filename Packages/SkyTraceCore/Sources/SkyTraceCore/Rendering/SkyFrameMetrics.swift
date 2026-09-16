@@ -66,16 +66,20 @@ public struct SkyFrameMetrics: Sendable {
         labelProjectionDuration = duration
     }
 
-    public mutating func reset() {
+    public mutating func resetSampling() {
         frameIntervals.removeAll(keepingCapacity: true)
+        lastFrameInterval = 0
+        consecutiveSlowFrames = 0
+        lastFrameTimestamp = nil
+    }
+
+    public mutating func reset() {
+        resetSampling()
         geometryRebuildCount = 0
         dynamicNodeUpdateCount = 0
         labelProjectionDuration = 0
-        lastFrameInterval = 0
-        consecutiveSlowFrames = 0
         longestSlowFrameRun = 0
         measuredFrameCount = 0
-        lastFrameTimestamp = nil
     }
 
     private func percentile(_ value: Double) -> Double {

@@ -4,6 +4,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Bindable var viewModel: SkyViewModel
+    @Environment(\.scenePhase) private var scenePhase
 
     @AppStorage("SkyTrace.DidShowOnboarding") private var didShowOnboarding = false
     @State private var showSearch = false
@@ -100,6 +101,8 @@ struct ContentView: View {
                 showCardinals: showCardinals,
                 motionEnabled: viewModel.motionEnabled,
                 motionReading: viewModel.motionReading,
+                isApplicationActive: scenePhase == .active,
+                isTimePlaybackActive: viewModel.isPlaying,
                 onCameraChange: { viewModel.camera = $0 },
                 onTap: { objectID in
                     if let objectID {

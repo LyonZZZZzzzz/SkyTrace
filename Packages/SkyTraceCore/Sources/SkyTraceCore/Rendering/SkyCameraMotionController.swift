@@ -82,6 +82,16 @@ struct SkyCameraMotionController {
         rollVelocity = 0
     }
 
+    mutating func suspend() {
+        isInteracting = false
+        horizontalVelocity = 0
+        verticalVelocity = 0
+        rollVelocity = 0
+        targetOrientation = orientation
+        targetFieldOfView = fieldOfView
+        lastUpdateTime = nil
+    }
+
     mutating func beginInteraction() {
         isInteracting = true
         horizontalVelocity = 0

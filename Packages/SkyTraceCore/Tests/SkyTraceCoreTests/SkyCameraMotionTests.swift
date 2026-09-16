@@ -129,6 +129,24 @@ final class SkyCameraMotionTests: XCTestCase {
         XCTAssertLessThan(angle(interrupted, motion.basis.forward), 0.01)
     }
 
+    func testSuspendStopsInertiaAndResetsTimeBase() {
+        var motion = SkyCameraMotionController()
+        motion.beginInteraction()
+        motion.rotate(horizontalDegrees: 0, verticalDegrees: 10, rollDegrees: 0)
+        _ = motion.update(at: 0)
+        motion.endInteraction(horizontalVelocity: 0, verticalVelocity: 240, rollVelocity: 0)
+        _ = motion.update(at: 1.0 / 60.0)
+
+        motion.suspend()
+        let suspended = motion.basis.forward
+        for frame in 2...120 {
+            _ = motion.update(at: Double(frame) / 60)
+        }
+
+        XCTAssertLessThan(angle(suspended, motion.basis.forward), 0.000_1)
+        XCTAssertFalse(motion.isMoving)
+    }
+
     @MainActor
     func testMotionBasedProjectionMatchesSceneKitView() throws {
         let controller = SkySceneController()

@@ -34,6 +34,23 @@ final class SkyTraceUITests: XCTestCase {
         XCTAssertTrue(app.buttons["搜索天体"].exists)
     }
 
+    func testBackgroundForegroundThenPan() {
+        let app = launchApp()
+        let searchButton = app.buttons["搜索天体"]
+        XCTAssertTrue(searchButton.waitForExistence(timeout: 8))
+
+        XCUIDevice.shared.press(.home)
+        sleep(2)
+        app.activate()
+        XCTAssertTrue(searchButton.waitForExistence(timeout: 8))
+
+        let window = app.windows.firstMatch
+        let start = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.58))
+        let end = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.34))
+        start.press(forDuration: 0.1, thenDragTo: end)
+        XCTAssertTrue(searchButton.exists)
+    }
+
     func testOpenObservationPlan() {
         let app = launchApp()
         let planButton = app.buttons["今晚观测计划"]

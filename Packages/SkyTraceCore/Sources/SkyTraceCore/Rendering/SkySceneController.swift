@@ -61,8 +61,12 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     private var labelSourceKey: LabelSourceKey?
     private var motionTarget: SkyMotionReading?
     private var lastPublishedCameraState: SkyCameraState?
+    private var isApplicationActive = true
+    private var isViewVisible = true
+    private var isTimePlaybackActive = false
+    private var renderingSuspended = false
     private var debugFrameCounter = 0
-    private nonisolated let frameUpdateLock = OSAllocatedUnfairLock(initialState: false)
+    private nonisolated let frameUpdateLock = OSAllocatedUnfairLock(initialState: FrameUpdateState())
 
     public init(
         sceneView: SCNView = SCNView(frame: .zero),
@@ -140,6 +144,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         showConstellations: Bool,
         starScale: CGFloat
     ) {
+        wakeRendering()
         let targetChanged = snapshot.moment != targetSnapshot.moment ||
             snapshot.observer != targetSnapshot.observer ||
             targetSnapshot.positions.isEmpty
@@ -186,6 +191,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     }
 
     public func updateLabels(magnitudeLimit: Double, showCardinals: Bool) {
+        wakeRendering()
         self.labelMagnitudeLimit = magnitudeLimit
         self.showCardinals = showCardinals
         labelSourceKey = nil
@@ -198,6 +204,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         notify: Bool = true,
         immediate: Bool = true
     ) {
+        wakeRendering()
         self.selectedObjectID = selectedObjectID
         if immediate {
             cameraMotion.setImmediate(state)
@@ -221,6 +228,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     }
 
     public func synchronizeCamera(_ state: SkyCameraState, selectedObjectID: String?) {
+        wakeRendering()
         self.selectedObjectID = selectedObjectID
         if isUserInteracting {
             return
@@ -234,6 +242,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     }
 
     public func beginCameraInteraction() {
+        wakeRendering()
         isUserInteracting = true
         cameraMotion.beginInteraction()
     }
@@ -244,6 +253,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         rollVelocity: Double,
         viewportSize: CGSize
     ) {
+        wakeRendering()
         let horizontalScale = currentCameraState.fieldOfView / max(Double(viewportSize.width), 1)
         let verticalScale = currentCameraState.fieldOfView / max(Double(viewportSize.height), 1)
         isUserInteracting = false
@@ -256,6 +266,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
             let state = currentCameraState
             lastPublishedCameraState = state
             onCameraSettled?(state)
+            updateContinuousRenderingMode()
         }
     }
 
@@ -282,6 +293,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         viewportSize: CGSize,
         notify: Bool = true
     ) {
+        wakeRendering()
         let horizontalScale = currentCameraState.fieldOfView / max(Double(viewportSize.width), 1)
         let verticalScale = currentCameraState.fieldOfView / max(Double(viewportSize.height), 1)
         cameraMotion.rotate(
@@ -295,6 +307,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     }
 
     public func zoom(by scale: Double, notify: Bool = true) {
+        wakeRendering()
         cameraMotion.zoom(by: scale)
         if notify {
             onCameraChange?(currentCameraState)
@@ -302,6 +315,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     }
 
     public func rotate(by degrees: Double, notify: Bool = true) {
+        wakeRendering()
         cameraMotion.rotate(horizontalDegrees: 0, verticalDegrees: 0, rollDegrees: degrees)
         if notify {
             onCameraChange?(currentCameraState)
@@ -309,6 +323,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     }
 
     public func nudge(horizontal: Double = 0, vertical: Double = 0, zoom: Double = 0, notify: Bool = true) {
+        wakeRendering()
         cameraMotion.rotate(
             horizontalDegrees: -horizontal,
             verticalDegrees: vertical,
@@ -324,10 +339,34 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
 
     public func setMotionReading(_ reading: SkyMotionReading?) {
         motionTarget = reading
+        if reading != nil {
+            wakeRendering()
+        } else {
+            updateContinuousRenderingMode()
+        }
     }
 
     public func resetMetrics() {
         metrics.reset()
+    }
+
+    public func setApplicationActive(_ active: Bool, isVisible: Bool) {
+        isApplicationActive = active
+        isViewVisible = isVisible
+        if active && isVisible {
+            wakeRendering()
+        } else {
+            suspendRendering()
+        }
+    }
+
+    public func setTimePlaybackActive(_ active: Bool) {
+        isTimePlaybackActive = active
+        if active {
+            wakeRendering()
+        } else {
+            updateContinuousRenderingMode()
+        }
     }
 
     var debugCelestialRootNode: SCNNode { celestialRootNode }
@@ -336,6 +375,13 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     var debugCurrentDynamicVectors: [String: Vector3D] { currentDynamicVectors }
     var debugTransitionStartTime: TimeInterval { transitionStartTime }
     var debugTransitionDuration: TimeInterval { transitionDuration }
+    var debugRendersContinuously: Bool { sceneView.rendersContinuously }
+    var debugSceneIsPlaying: Bool { sceneView.isPlaying }
+    var debugRenderingEnabled: Bool { frameUpdateLock.withLock { $0.isEnabled } }
+
+    func debugRefreshContinuousRenderingMode() {
+        updateContinuousRenderingMode()
+    }
 
     func debugAdvanceAnimation(to time: TimeInterval) {
         updateAnimation(at: time)
@@ -350,17 +396,20 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
 
 
     public nonisolated func renderer(_ renderer: any SCNSceneRenderer, updateAtTime time: TimeInterval) {
-        let shouldSchedule = frameUpdateLock.withLock { isScheduled -> Bool in
-            guard !isScheduled else { return false }
-            isScheduled = true
+        let shouldSchedule = frameUpdateLock.withLock { state -> Bool in
+            guard state.isEnabled, !state.isScheduled else { return false }
+            state.isScheduled = true
             return true
         }
         guard shouldSchedule else { return }
 
         Task { @MainActor [weak self] in
             guard let self else { return }
-            self.updateFrame(at: time)
-            self.frameUpdateLock.withLock { $0 = false }
+            if self.isApplicationActive && self.isViewVisible {
+                self.updateFrame(at: time)
+                self.updateContinuousRenderingMode()
+            }
+            self.frameUpdateLock.withLock { $0.isScheduled = false }
         }
     }
 
@@ -376,6 +425,53 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
             )
             SkyTraceDiagnostics.event("FrameMetricsReport")
         }
+#endif
+    }
+
+    private func wakeRendering() {
+        guard isApplicationActive && isViewVisible else { return }
+        if renderingSuspended {
+            metrics.resetSampling()
+            renderingSuspended = false
+        }
+        frameUpdateLock.withLock { $0.isEnabled = true }
+        sceneView.rendersContinuously = true
+        sceneView.isPlaying = true
+        requestSceneDisplay()
+    }
+
+    private func suspendRendering() {
+        renderingSuspended = true
+        isUserInteracting = false
+        motionTarget = nil
+        cameraMotion.suspend()
+        metrics.resetSampling()
+        frameUpdateLock.withLock { $0.isEnabled = false }
+        sceneView.rendersContinuously = false
+        sceneView.isPlaying = false
+    }
+
+    private func updateContinuousRenderingMode() {
+        let shouldRenderContinuously = isApplicationActive && isViewVisible && (
+            isUserInteracting ||
+            cameraMotion.isMoving ||
+            transitionDuration > 0 ||
+            isTimePlaybackActive ||
+            motionTarget != nil
+        )
+        frameUpdateLock.withLock { $0.isEnabled = shouldRenderContinuously }
+        sceneView.rendersContinuously = shouldRenderContinuously
+        sceneView.isPlaying = shouldRenderContinuously
+        if !shouldRenderContinuously {
+            requestSceneDisplay()
+        }
+    }
+
+    private func requestSceneDisplay() {
+#if os(macOS)
+        sceneView.setNeedsDisplay(sceneView.bounds)
+#else
+        sceneView.setNeedsDisplay()
 #endif
     }
 
@@ -739,6 +835,11 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         }
         return delta
     }
+}
+
+private struct FrameUpdateState: Sendable {
+    var isScheduled = false
+    var isEnabled = true
 }
 
 private struct GeometryKey: Equatable {

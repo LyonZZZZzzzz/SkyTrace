@@ -64,6 +64,8 @@ public final class SkyViewModel {
     @ObservationIgnored private var toastTask: Task<Void, Never>?
     @ObservationIgnored private var planTask: Task<Void, Never>?
     @ObservationIgnored private var eventTask: Task<Void, Never>?
+    @ObservationIgnored private var applicationIsActive = true
+    @ObservationIgnored private var resumePlaybackAfterForeground = false
 
     public convenience init() {
         self.init(
@@ -482,6 +484,32 @@ public final class SkyViewModel {
         cameraAltitude += vertical
         if zoom != 0 {
             fieldOfView += zoom
+        }
+    }
+
+    public func setApplicationActive(_ active: Bool) {
+        guard applicationIsActive != active else { return }
+        applicationIsActive = active
+
+        if active {
+            if motionEnabled, !motionService.isActive {
+                motionService.start()
+            }
+            if resumePlaybackAfterForeground, !isPlaying {
+                startPlayback()
+            }
+            resumePlaybackAfterForeground = false
+        } else {
+            resumePlaybackAfterForeground = isPlaying
+            if isPlaying {
+                playbackTask?.cancel()
+                playbackTask = nil
+                isPlaying = false
+            }
+            if motionService.isActive {
+                motionService.stop()
+            }
+            motionReading = nil
         }
     }
 

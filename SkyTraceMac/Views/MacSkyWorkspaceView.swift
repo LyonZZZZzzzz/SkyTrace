@@ -19,6 +19,7 @@ struct MacSkyWorkspaceView: View {
                 starScale: uiState.starScale,
                 labelMagnitudeLimit: uiState.labelDensity.magnitudeLimit,
                 showCardinals: uiState.showCardinals,
+                isTimePlaybackActive: viewModel.isPlaying,
                 onCameraChange: { viewModel.camera = $0 },
                 onSelect: { objectID in
                     if let objectID {

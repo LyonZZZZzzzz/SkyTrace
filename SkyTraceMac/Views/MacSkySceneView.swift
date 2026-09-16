@@ -12,6 +12,7 @@ struct MacSkySceneView: NSViewRepresentable {
     let starScale: Double
     let labelMagnitudeLimit: Double
     let showCardinals: Bool
+    let isTimePlaybackActive: Bool
 
     let onCameraChange: (SkyCameraState) -> Void
     let onSelect: (String?) -> Void
@@ -25,6 +26,9 @@ struct MacSkySceneView: NSViewRepresentable {
         let view = MacInteractiveSceneView(frame: .zero)
         let controller = SkySceneController(sceneView: view, catalog: catalog)
         context.coordinator.controller = controller
+        view.onLifecycleChange = { active, visible in
+            context.coordinator.setLifecycle(active: active, visible: visible)
+        }
         view.onInteractionStart = { context.coordinator.beginInteraction() }
         view.onOrbit = { horizontal, vertical, _ in
             context.coordinator.orbit(horizontal: horizontal, vertical: vertical)
@@ -65,6 +69,7 @@ struct MacSkySceneView: NSViewRepresentable {
         }
 
         func update() {
+            controller.setTimePlaybackActive(parent.isTimePlaybackActive)
             controller.update(
                 snapshot: parent.snapshot,
                 showConstellations: parent.showConstellations,
@@ -80,6 +85,10 @@ struct MacSkySceneView: NSViewRepresentable {
             )
             controller.onCameraChange = parent.onCameraChange
             controller.onCameraSettled = parent.onCameraChange
+        }
+
+        func setLifecycle(active: Bool, visible: Bool) {
+            controller.setApplicationActive(active, isVisible: visible)
         }
 
         func beginInteraction() {
@@ -132,6 +141,7 @@ struct MacSkySceneView: NSViewRepresentable {
 }
 
 final class MacInteractiveSceneView: SCNView {
+    var onLifecycleChange: ((Bool, Bool) -> Void)?
     var onInteractionStart: (() -> Void)?
     var onOrbit: ((Double, Double, TimeInterval) -> Void)?
     var onScrollOrbit: ((Double, Double) -> Void)?
@@ -148,8 +158,72 @@ final class MacInteractiveSceneView: SCNView {
     private var lastDragTimestamp: TimeInterval?
     private var lastHorizontalVelocity = 0.0
     private var lastVerticalVelocity = 0.0
+    private nonisolated(unsafe) var lifecycleObservers: [NSObjectProtocol] = []
 
     override var acceptsFirstResponder: Bool { true }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        lifecycleObservers.forEach(NotificationCenter.default.removeObserver)
+        lifecycleObservers.removeAll(keepingCapacity: true)
+
+        guard let window else {
+            onLifecycleChange?(false, false)
+            return
+        }
+
+        let center = NotificationCenter.default
+        lifecycleObservers = [
+            center.addObserver(
+                forName: NSApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.notifyLifecycleChange() }
+            },
+            center.addObserver(
+                forName: NSApplication.didResignActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.notifyLifecycleChange() }
+            },
+            center.addObserver(
+                forName: NSWindow.didMiniaturizeNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.notifyLifecycleChange() }
+            },
+            center.addObserver(
+                forName: NSWindow.didDeminiaturizeNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.notifyLifecycleChange() }
+            },
+            center.addObserver(
+                forName: NSWindow.didChangeOcclusionStateNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.notifyLifecycleChange() }
+            }
+        ]
+        notifyLifecycleChange()
+    }
+
+    deinit {
+        lifecycleObservers.forEach(NotificationCenter.default.removeObserver)
+    }
+
+    private func notifyLifecycleChange() {
+        let applicationActive = NSApp.isActive
+        let windowVisible = window?.isVisible == true &&
+            window?.isMiniaturized == false &&
+            window?.occlusionState.contains(.visible) == true
+        onLifecycleChange?(applicationActive, windowVisible)
+    }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)

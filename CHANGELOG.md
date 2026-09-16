@@ -10,11 +10,15 @@ and the project follows [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - Reworked camera interaction around quaternion orientation with damped following and release inertia
+- SceneKit now pauses completely in the background and switches to on-demand rendering while the foreground scene is idle
+- Time playback and CoreMotion pause in the background and resume from the previous state when the app returns
 - Horizontal and vertical dragging can now cross the zenith and nadir continuously without hard altitude limits
 
 ### Fixed
 
 - Removed the 45-degree camera roll jump caused by switching reference axes near 84.268 degrees altitude
+- Prevented long background sessions from leaving the GPU active and causing sustained frame-rate loss after foregrounding
+- Excluded background gaps from foreground frame-time samples so P95/P99 recover immediately after resume
 - Kept SceneKit rendering, SpriteKit labels and picking aligned with the same current quaternion camera basis
 
 ## [1.2.1] - 2026-09-15

@@ -14,6 +14,8 @@ struct SkySceneView: UIViewRepresentable {
     let showCardinals: Bool
     let motionEnabled: Bool
     let motionReading: SkyMotionReading?
+    let isApplicationActive: Bool
+    let isTimePlaybackActive: Bool
 
     let onCameraChange: (SkyCameraState) -> Void
     let onTap: (String?) -> Void
@@ -49,6 +51,8 @@ struct SkySceneView: UIViewRepresentable {
         }
 
         func update() {
+            controller.setApplicationActive(parent.isApplicationActive, isVisible: true)
+            controller.setTimePlaybackActive(parent.isTimePlaybackActive)
             controller.update(
                 snapshot: parent.snapshot,
                 showConstellations: parent.showConstellations,

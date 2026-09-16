@@ -35,8 +35,10 @@ final class SkyLabelOverlayScene: SKScene {
     private(set) var displayedCardinalIDs: Set<String> = []
     private let maximumObjectNodes = 100
     private let maximumTextUpdatesPerFrame = 4
-    private let horizontalPadding: CGFloat = 6
-    private let verticalPadding: CGFloat = 4
+    private let showHorizontalPadding: CGFloat = 6
+    private let showVerticalPadding: CGFloat = 4
+    private let stickyHorizontalInset: CGFloat = 2
+    private let stickyVerticalInset: CGFloat = 1
 
     override init(size: CGSize) {
         super.init(size: size)
@@ -82,6 +84,8 @@ final class SkyLabelOverlayScene: SKScene {
     }
 
     func apply(visuals: [SkyLabelVisual], cardinals: [SkyLabelVisual]) {
+        let previouslyDisplayedObjectIDs = displayedObjectIDs
+        let previouslyDisplayedCardinalIDs = displayedCardinalIDs
         var textUpdates = 0
         var assignedObjectIDs = Set<String>()
         var preparedLabels: [PreparedObjectLabel] = []
@@ -130,11 +134,18 @@ final class SkyLabelOverlayScene: SKScene {
 
         displayedObjectIDs.removeAll(keepingCapacity: true)
         displayedCardinalIDs.removeAll(keepingCapacity: true)
-        var occupiedFrames: [CGRect] = []
-        occupiedFrames.reserveCapacity(preparedLabels.count + cardinals.count)
+        var occupiedShowFrames: [CGRect] = []
+        var occupiedStickyFrames: [CGRect] = []
+        occupiedShowFrames.reserveCapacity(preparedLabels.count + cardinals.count)
+        occupiedStickyFrames.reserveCapacity(preparedLabels.count + cardinals.count)
 
         for label in preparedLabels where label.textReady && label.visual.selected {
-            placeObjectLabel(label, occupiedFrames: &occupiedFrames)
+            placeObjectLabel(
+                label,
+                wasVisible: previouslyDisplayedObjectIDs.contains(label.visual.id),
+                occupiedShowFrames: &occupiedShowFrames,
+                occupiedStickyFrames: &occupiedStickyFrames
+            )
         }
 
         for (index, node) in cardinalNodes.enumerated() {
@@ -154,23 +165,32 @@ final class SkyLabelOverlayScene: SKScene {
                 textUpdates += 1
             }
 
-            let collision = collisionFrame(
+            let wasVisible = previouslyDisplayedCardinalIDs.contains(visual.id)
+            let collision = collisionFrames(
                 for: node,
                 cachedSize: cardinalNodeSizes[index],
                 center: visual.point
             )
-            guard !occupiedFrames.contains(where: { $0.intersects(collision.frame) }) else {
+            let candidateFrame = wasVisible ? collision.sticky : collision.show
+            let occupiedFrames = wasVisible ? occupiedStickyFrames : occupiedShowFrames
+            guard !occupiedFrames.contains(where: { $0.intersects(candidateFrame) }) else {
                 node.isHidden = true
                 continue
             }
             cardinalNodeSizes[index] = collision.size
-            occupiedFrames.append(collision.frame)
+            occupiedShowFrames.append(collision.show)
+            occupiedStickyFrames.append(collision.sticky)
             displayedCardinalIDs.insert(visual.id)
             node.isHidden = false
         }
 
         for label in preparedLabels where label.textReady && !label.visual.selected {
-            placeObjectLabel(label, occupiedFrames: &occupiedFrames)
+            placeObjectLabel(
+                label,
+                wasVisible: previouslyDisplayedObjectIDs.contains(label.visual.id),
+                occupiedShowFrames: &occupiedShowFrames,
+                occupiedStickyFrames: &occupiedStickyFrames
+            )
         }
 
         while textUpdates < maximumTextUpdatesPerFrame, prewarmIndex < prewarmTexts.count {
@@ -183,34 +203,39 @@ final class SkyLabelOverlayScene: SKScene {
 
     private func placeObjectLabel(
         _ label: PreparedObjectLabel,
-        occupiedFrames: inout [CGRect]
+        wasVisible: Bool,
+        occupiedShowFrames: inout [CGRect],
+        occupiedStickyFrames: inout [CGRect]
     ) {
         let node = objectNodes[label.nodeIndex]
         node.position = label.visual.point
-        let collision = collisionFrame(
+        let collision = collisionFrames(
             for: node,
             cachedSize: objectNodeSizes[label.nodeIndex],
             center: label.visual.point
         )
 
         if !label.visual.selected {
-            guard !occupiedFrames.contains(where: { $0.intersects(collision.frame) }) else {
+            let candidateFrame = wasVisible ? collision.sticky : collision.show
+            let occupiedFrames = wasVisible ? occupiedStickyFrames : occupiedShowFrames
+            guard !occupiedFrames.contains(where: { $0.intersects(candidateFrame) }) else {
                 node.isHidden = true
                 return
             }
         }
 
         objectNodeSizes[label.nodeIndex] = collision.size
-        occupiedFrames.append(collision.frame)
+        occupiedShowFrames.append(collision.show)
+        occupiedStickyFrames.append(collision.sticky)
         displayedObjectIDs.insert(label.visual.id)
         node.isHidden = false
     }
 
-    private func collisionFrame(
+    private func collisionFrames(
         for node: SKLabelNode,
         cachedSize: CGSize?,
         center: CGPoint
-    ) -> (frame: CGRect, size: CGSize) {
+    ) -> (show: CGRect, sticky: CGRect, size: CGSize) {
         let size: CGSize
         if let cachedSize {
             size = cachedSize
@@ -222,14 +247,15 @@ final class SkyLabelOverlayScene: SKScene {
                 height: max(measured.height, node.fontSize)
             )
         }
-        let frame = CGRect(
+        let baseFrame = CGRect(
             x: center.x - size.width * 0.5,
             y: center.y - size.height * 0.5,
             width: size.width,
             height: size.height
         )
-        .insetBy(dx: -horizontalPadding, dy: -verticalPadding)
-        return (frame, size)
+        let showFrame = baseFrame.insetBy(dx: -showHorizontalPadding, dy: -showVerticalPadding)
+        let stickyFrame = baseFrame.insetBy(dx: stickyHorizontalInset, dy: stickyVerticalInset)
+        return (showFrame, stickyFrame, size)
     }
 
     private func objectNodeIndex(for objectID: String) -> Int? {

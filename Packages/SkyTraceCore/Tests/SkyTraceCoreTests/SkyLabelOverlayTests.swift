@@ -106,6 +106,26 @@ final class SkyLabelOverlayTests: XCTestCase {
         XCTAssertEqual(scene.displayedObjectIDs, Set(["constellation", "star"]))
     }
 
+    func testVisibilityHysteresisPreventsBoundaryFlicker() {
+        let scene = SkyLabelOverlayScene(size: CGSize(width: 800, height: 600))
+        let first = visual(id: "a", text: "测试", point: CGPoint(x: 300, y: 300), kind: .star)
+
+        scene.apply(visuals: [first, visual(id: "b", text: "测试", point: CGPoint(x: 300, y: 340), kind: .star)], cardinals: [])
+        XCTAssertEqual(scene.displayedObjectIDs, Set(["a", "b"]))
+
+        scene.apply(visuals: [first, visual(id: "b", text: "测试", point: CGPoint(x: 300, y: 318), kind: .star)], cardinals: [])
+        XCTAssertEqual(scene.displayedObjectIDs, Set(["a", "b"]))
+
+        scene.apply(visuals: [first, visual(id: "b", text: "测试", point: CGPoint(x: 300, y: 308), kind: .star)], cardinals: [])
+        XCTAssertEqual(scene.displayedObjectIDs, Set(["a"]))
+
+        scene.apply(visuals: [first, visual(id: "b", text: "测试", point: CGPoint(x: 300, y: 318), kind: .star)], cardinals: [])
+        XCTAssertEqual(scene.displayedObjectIDs, Set(["a"]))
+
+        scene.apply(visuals: [first, visual(id: "b", text: "测试", point: CGPoint(x: 300, y: 340), kind: .star)], cardinals: [])
+        XCTAssertEqual(scene.displayedObjectIDs, Set(["a", "b"]))
+    }
+
     func testPrewarmQueueProcessesAtMostFourTextsPerFrame() {
         let scene = SkyLabelOverlayScene(size: CGSize(width: 800, height: 600))
         scene.queuePrewarm(texts: ["一", "二", "三", "四", "五", "六"])

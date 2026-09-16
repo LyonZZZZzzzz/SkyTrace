@@ -5,6 +5,14 @@ All notable changes to SkyTrace are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project follows [Semantic Versioning](https://semver.org/).
 
+## [1.2.4] - 2026-09-16
+
+### Fixed
+
+- Stopped sky labels from flickering when camera damping settled near a collision boundary
+- Added separate show and hide thresholds so tiny pan, zoom or hand-off movements cannot repeatedly toggle label visibility
+- Applied the same hysteresis to object labels and cardinal direction markers
+
 ## [1.2.3] - 2026-09-16
 
 ### Changed

@@ -22,7 +22,11 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     public var onCameraSettled: ((SkyCameraState) -> Void)?
     public var onDiagnosticsChange: ((SkyRenderDiagnostics) -> Void)?
     public var onLabelReadinessChange: ((Bool) -> Void)? {
-        didSet { onLabelReadinessChange?(isLabelPreparationComplete) }
+        didSet {
+            if !isShutdown {
+                onLabelReadinessChange?(isLabelPreparationComplete)
+            }
+        }
     }
     public var isLabelPreparationComplete: Bool { labelPreparationComplete }
     public var isUserInteracting = false
@@ -83,6 +87,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     private var isApplicationActive = true
     private var isViewVisible = true
     private var renderingSuspended = false
+    private var isShutdown = false
     private var renderPolicy: SkyRenderPolicy = .idleWarm
     private var interactionRenderPolicy = SkyInteractionRenderPolicy()
     private var interactionRenderProfile = SkyInteractionRenderProfile.full
@@ -92,6 +97,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     private var performanceGovernor = SkyPerformanceGovernor()
     private var lastRenderEnvironment: SkyRenderEnvironment?
     private var debugFrameCounter = 0
+    private nonisolated let lifecycleTrace: SkyRendererLifecycleTrace?
     private nonisolated let frameMailbox = FrameUpdateMailbox()
     private var frameConsumerTask: Task<Void, Never>?
 
@@ -101,6 +107,9 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         astronomy: any AstronomyCalculating = AstronomyService(),
         labelVisibilityMode: SkyLabelVisibilityMode = .adaptive
     ) {
+        let lifecycleTrace = SkyRendererLifecycleTrace.makeIfEnabled()
+        lifecycleTrace?.event("RendererCreationStarted")
+        self.lifecycleTrace = lifecycleTrace
         self.sceneView = sceneView
         self.catalog = catalog
         self.astronomy = astronomy
@@ -173,9 +182,11 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         updateCamera(SkyCameraState(), selectedObjectID: nil, notify: false)
         lastPublishedCameraState = currentCameraState
         startFrameConsumer()
+        lifecycleTrace?.event("RendererCreated")
     }
 
     deinit {
+        lifecycleTrace?.event("RendererControllerDeinitializing")
         frameConsumerTask?.cancel()
         staticGeometryTask?.cancel()
         frameMailbox.finish()
@@ -186,6 +197,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         showConstellations: Bool,
         starScale: CGFloat
     ) {
+        guard !isShutdown else { return }
         wakeRendering()
         let targetChanged = !hasAppliedSceneTarget ||
             snapshot.moment != targetSnapshot.moment ||
@@ -239,6 +251,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     }
 
     public func updateLabels(magnitudeLimit: Double, showCardinals: Bool) {
+        guard !isShutdown else { return }
         let magnitudeChanged = abs(self.labelMagnitudeLimit - magnitudeLimit) > 0.000_1
         let cardinalChanged = self.showCardinals != showCardinals
         guard magnitudeChanged || cardinalChanged else { return }
@@ -257,6 +270,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         notify: Bool = true,
         immediate: Bool = true
     ) {
+        guard !isShutdown else { return }
         wakeRendering()
         self.selectedObjectID = selectedObjectID
         if immediate {
@@ -282,6 +296,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     }
 
     public func synchronizeCamera(_ state: SkyCameraState, selectedObjectID: String?) {
+        guard !isShutdown else { return }
         if self.selectedObjectID != selectedObjectID {
             self.selectedObjectID = selectedObjectID
             updateSelection()
@@ -301,6 +316,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     }
 
     public func beginCameraInteraction() {
+        guard !isShutdown else { return }
         isUserInteracting = true
         isInteractionPerformanceWindowActive = true
         cameraMotion.beginInteraction()
@@ -314,6 +330,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         rollVelocity: Double,
         viewportSize: CGSize
     ) {
+        guard !isShutdown else { return }
         wakeRendering()
         let horizontalScale = currentCameraState.fieldOfView / max(Double(viewportSize.width), 1)
         let verticalScale = currentCameraState.fieldOfView / max(Double(viewportSize.height), 1)
@@ -333,6 +350,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     }
 
     public func pick(at point: CGPoint, in size: CGSize) -> String? {
+        guard !isShutdown else { return nil }
         let projection = SkyProjection(
             camera: currentCameraState,
             basis: cameraMotion.basis,
@@ -355,6 +373,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         viewportSize: CGSize,
         notify: Bool = true
     ) {
+        guard !isShutdown else { return }
         wakeRendering()
         let horizontalScale = currentCameraState.fieldOfView / max(Double(viewportSize.width), 1)
         let verticalScale = currentCameraState.fieldOfView / max(Double(viewportSize.height), 1)
@@ -370,6 +389,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     }
 
     public func zoom(by scale: Double, notify: Bool = true) {
+        guard !isShutdown else { return }
         wakeRendering()
         cameraMotion.zoom(by: scale)
         updateContinuousRenderingMode()
@@ -379,6 +399,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     }
 
     public func rotate(by degrees: Double, notify: Bool = true) {
+        guard !isShutdown else { return }
         wakeRendering()
         cameraMotion.rotate(horizontalDegrees: 0, verticalDegrees: 0, rollDegrees: degrees)
         updateContinuousRenderingMode()
@@ -388,6 +409,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     }
 
     public func nudge(horizontal: Double = 0, vertical: Double = 0, zoom: Double = 0, notify: Bool = true) {
+        guard !isShutdown else { return }
         wakeRendering()
         cameraMotion.rotate(
             horizontalDegrees: -horizontal,
@@ -404,6 +426,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     }
 
     public func setMotionReading(_ reading: SkyMotionReading?) {
+        guard !isShutdown else { return }
         let wasFollowingMotion = motionTarget != nil
         motionTarget = isApplicationActive && isViewVisible ? reading : nil
         guard wasFollowingMotion != (motionTarget != nil) else { return }
@@ -415,11 +438,13 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     }
 
     public func setApplicationActive(_ active: Bool, isVisible: Bool) {
+        guard !isShutdown else { return }
         let wasBlocked = !isApplicationActive || !isViewVisible
         isApplicationActive = active
         isViewVisible = isVisible
         if active && isVisible {
             if wasBlocked {
+                lifecycleTrace?.awaitFirstFrame()
                 wakeRendering()
                 updateContinuousRenderingMode()
             }
@@ -429,6 +454,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     }
 
     public func updateRenderEnvironment(_ environment: SkyRenderEnvironment) {
+        guard !isShutdown else { return }
         let previousPressure = lastRenderEnvironment?.memoryPressure ?? .normal
         lastRenderEnvironment = environment
         if environment.memoryPressure != .normal,
@@ -444,11 +470,19 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     }
 
     public func shutdown() {
+        guard !isShutdown else { return }
+        isShutdown = true
+        lifecycleTrace?.event("RendererShutdownStarted")
+        isUserInteracting = false
+        cameraMotion.suspend()
+        motionTarget = nil
+        transitionDuration = 0
+        renderPolicy = .suspended
         onCameraChange = nil
         onCameraSettled = nil
         onDiagnosticsChange = nil
         onLabelReadinessChange = nil
-        frameMailbox.setEnabled(false)
+        lifecycleTrace?.cancelFirstFrame()
         frameMailbox.finish()
         frameConsumerTask?.cancel()
         frameConsumerTask = nil
@@ -456,7 +490,9 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         sceneView.delegate = nil
         sceneView.rendersContinuously = false
         sceneView.isPlaying = false
+        lifecycleTrace?.event("RendererStopped")
         sceneView.overlaySKScene = nil
+        lifecycleTrace?.event("RendererDetached")
     }
 
     private func applyRenderAdaptationProfile(_ profile: SkyRenderAdaptationProfile) {
@@ -544,6 +580,8 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         updateOverlayLabels(force: true)
     }
 
+    var debugStaticGeometryTask: Task<Void, Never>? { staticGeometryTask }
+
     func debugWaitForStaticGeometry() async {
         await staticGeometryTask?.value
     }
@@ -560,6 +598,14 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         frameMailbox.submit(time: time)
     }
 
+    public nonisolated func renderer(
+        _ renderer: any SCNSceneRenderer,
+        didRenderScene scene: SCNScene,
+        atTime time: TimeInterval
+    ) {
+        lifecycleTrace?.recordFirstFrame()
+    }
+
     private func startFrameConsumer() {
         frameConsumerTask?.cancel()
         frameConsumerTask = Task { @MainActor [weak self] in
@@ -570,7 +616,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
                     mailbox.finish()
                     return
                 }
-                if self.isApplicationActive && self.isViewVisible {
+                if !self.isShutdown && self.isApplicationActive && self.isViewVisible {
                     self.updateFrame(at: time)
                     self.updateContinuousRenderingMode()
                 }
@@ -659,7 +705,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     }
 
     private func wakeRendering() {
-        guard isApplicationActive && isViewVisible else { return }
+        guard !isShutdown, isApplicationActive, isViewVisible else { return }
         if renderingSuspended {
             metrics.resetSampling()
             renderingSuspended = false
@@ -675,6 +721,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     }
 
     private func suspendRendering() {
+        lifecycleTrace?.cancelFirstFrame()
         renderingSuspended = true
         isUserInteracting = false
         resetInteractionPerformanceWindow()
@@ -690,6 +737,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     }
 
     private func updateContinuousRenderingMode() {
+        guard !isShutdown else { return }
         let previousPolicy = renderPolicy
         if !isApplicationActive || !isViewVisible {
             renderPolicy = .suspended
@@ -757,6 +805,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     }
 
     private func requestSceneDisplay() {
+        guard !isShutdown else { return }
 #if os(macOS)
         sceneView.setNeedsDisplay(sceneView.bounds)
 #else
@@ -806,6 +855,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
             guard
                 !Task.isCancelled,
                 let self,
+                !self.isShutdown,
                 generation == self.staticGeometryGeneration
             else { return }
             self.installStaticGeometry(
@@ -1358,6 +1408,7 @@ private extension simd_float3x3 {
 
 private struct FrameUpdateMailboxState: Sendable {
     var isEnabled = true
+    var isFinished = false
     var isPending = false
     var pendingTime: TimeInterval?
 }
@@ -1382,6 +1433,7 @@ private final class FrameUpdateMailbox: @unchecked Sendable {
 
     func setEnabled(_ enabled: Bool) {
         lock.withLock { state in
+            guard !state.isFinished else { return }
             state.isEnabled = enabled
             if !enabled {
                 state.isPending = false
@@ -1420,6 +1472,12 @@ private final class FrameUpdateMailbox: @unchecked Sendable {
     }
 
     func finish() {
+        lock.withLock { state in
+            state.isFinished = true
+            state.isEnabled = false
+            state.isPending = false
+            state.pendingTime = nil
+        }
         continuation.finish()
     }
 }

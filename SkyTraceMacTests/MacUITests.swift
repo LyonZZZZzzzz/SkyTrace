@@ -82,16 +82,16 @@ final class MacUITests: XCTestCase {
             var stopped = start
             var referencesReleased = start
             autoreleasepool {
-                var view: SCNView? = SCNView(frame: .zero)
-                releasedView = view
-                viewCreated = CACurrentMediaTime()
-                var controller: SkySceneController? = SkySceneController(sceneView: view!)
-                releasedController = controller
-                controllerCreated = CACurrentMediaTime()
-                controller?.shutdown()
-                stopped = CACurrentMediaTime()
-                controller = nil
-                view = nil
+                do {
+                    let view = SCNView(frame: .zero)
+                    releasedView = view
+                    viewCreated = CACurrentMediaTime()
+                    let controller = SkySceneController(sceneView: view)
+                    releasedController = controller
+                    controllerCreated = CACurrentMediaTime()
+                    controller.shutdown()
+                    stopped = CACurrentMediaTime()
+                }
                 referencesReleased = CACurrentMediaTime()
             }
             let drained = CACurrentMediaTime()

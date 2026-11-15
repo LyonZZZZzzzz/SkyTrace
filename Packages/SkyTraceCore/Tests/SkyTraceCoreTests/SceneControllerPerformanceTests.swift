@@ -443,6 +443,36 @@ final class SceneControllerPerformanceTests: XCTestCase {
         XCTAssertFalse(controller.sceneView.isPlaying)
     }
 
+    func testShutdownIgnoresLateUpdatesAndCancelsPendingGeometry() async {
+        let controller = SkySceneController(catalog: makeCatalog())
+        let snapshot = makeSnapshot(date: startDate)
+        controller.update(snapshot: snapshot, showConstellations: true, starScale: 1)
+        controller.beginCameraInteraction()
+        let pendingBuild = controller.debugStaticGeometryTask
+        XCTAssertNotNil(pendingBuild)
+
+        controller.shutdown()
+        controller.shutdown()
+        controller.setApplicationActive(false, isVisible: false)
+        controller.setApplicationActive(true, isVisible: true)
+        controller.update(snapshot: snapshot, showConstellations: true, starScale: 1.2)
+        controller.updateLabels(magnitudeLimit: 4, showCardinals: false)
+        controller.setMotionReading(SkyMotionReading(azimuth: 30, altitude: 20, roll: 0))
+        controller.beginCameraInteraction()
+        controller.zoom(by: 2)
+
+        await pendingBuild?.value
+        await controller.debugWaitForStaticGeometry()
+        XCTAssertEqual(controller.staticGeometryRebuildCount, 0)
+        XCTAssertEqual(controller.debugRenderPolicy, .suspended)
+        XCTAssertFalse(controller.isUserInteracting)
+        XCTAssertFalse(controller.debugRenderingEnabled)
+        XCTAssertFalse(controller.sceneView.rendersContinuously)
+        XCTAssertFalse(controller.sceneView.isPlaying)
+        XCTAssertNil(controller.sceneView.delegate)
+        XCTAssertNil(controller.sceneView.overlaySKScene)
+    }
+
     func testAlwaysVisibleLabelsIgnoreFieldOfViewInteractionAndPressureProfiles() {
         let catalog = makeDenseLabelCatalog(count: 150)
         let controller = SkySceneController(

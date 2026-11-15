@@ -93,4 +93,50 @@ final class ObservationLogRepositoryTests: XCTestCase {
         let remaining = try await repository.allEntries()
         XCTAssertTrue(remaining.isEmpty)
     }
+
+    func testOutOfRangeValuesAreSanitizedInsteadOfCrashing() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let fileURL = directory.appendingPathComponent("logs.json")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let createdAt = Date(timeIntervalSince1970: 1_789_200_000)
+        var invalid = ObservationLogEntry(
+            objectID: "moon",
+            objectName: "月球",
+            observedAt: createdAt,
+            observer: .shanghai,
+            rating: 4,
+            weather: .clear,
+            equipment: .nakedEye,
+            notes: "  test  ",
+            createdAt: createdAt,
+            updatedAt: createdAt
+        )
+        invalid.rating = -20
+        invalid.latitude = 200
+        invalid.longitude = -500
+        invalid.objectID = "   "
+        invalid.objectName = ""
+        invalid.observerName = "   "
+        invalid.timeZoneIdentifier = "Not/AZone"
+        invalid.updatedAt = createdAt.addingTimeInterval(-60)
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode([invalid]).write(to: fileURL)
+
+        let loaded = try await ObservationLogRepository(fileURL: fileURL).allEntries()
+        let entry = try XCTUnwrap(loaded.first)
+
+        XCTAssertEqual(entry.rating, 1)
+        XCTAssertEqual(entry.latitude, 90)
+        XCTAssertEqual(entry.longitude, -180)
+        XCTAssertEqual(entry.objectID, "unknown")
+        XCTAssertEqual(entry.objectName, "未知目标")
+        XCTAssertEqual(entry.observerName, "未知地点")
+        XCTAssertEqual(entry.timeZoneIdentifier, "UTC")
+        XCTAssertEqual(entry.notes, "test")
+        XCTAssertGreaterThanOrEqual(entry.updatedAt, entry.createdAt)
+    }
 }

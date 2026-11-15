@@ -1,0 +1,3 @@
+import SkyTraceCore
+
+typealias RenderEnvironmentMonitor = SkyRenderEnvironmentMonitor

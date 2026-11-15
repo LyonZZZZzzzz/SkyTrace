@@ -14,18 +14,6 @@ struct TimeControlsView: View {
                 timeButton(symbol: "minus", label: "后退一小时") {
                     viewModel.shiftTime(by: -3_600)
                 }
-
-                Button {
-                    viewModel.togglePlayback()
-                } label: {
-                    Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 17, weight: .bold))
-                        .frame(width: 48, height: 40)
-                        .foregroundStyle(Color.skyBackground)
-                        .background(Color.skyCyan, in: Capsule())
-                }
-                .accessibilityLabel(viewModel.isPlaying ? "暂停时间" : "播放时间")
-
                 timeButton(symbol: "plus", label: "前进一小时") {
                     viewModel.shiftTime(by: 3_600)
                 }
@@ -39,23 +27,15 @@ struct TimeControlsView: View {
                     viewModel.resetToNow()
                 }
                 .font(.caption.weight(.semibold))
+                .accessibilityIdentifier("time.now")
 
                 Button {
                     showDatePicker = true
                 } label: {
-                    Label("日期", systemImage: "calendar")
+                    Label("选择时间", systemImage: "calendar")
                         .font(.caption.weight(.semibold))
                 }
-
-                Menu {
-                    Button("1 秒/秒") { viewModel.playbackDaysPerSecond = SkyViewModel.realTimePlaybackDaysPerSecond }
-                    Button("1 分钟/秒") { viewModel.playbackDaysPerSecond = 1.0 / 1440 }
-                    Button("1 小时/秒") { viewModel.playbackDaysPerSecond = 1.0 / 24 }
-                    Button("1 天/秒") { viewModel.playbackDaysPerSecond = 1 }
-                } label: {
-                    Label(playbackLabel, systemImage: "speedometer")
-                        .font(.caption.weight(.semibold))
-                }
+                .accessibilityIdentifier("time.select")
 
                 Spacer()
 
@@ -79,8 +59,9 @@ struct TimeControlsView: View {
                     displayedComponents: [.date, .hourAndMinute]
                 )
                 .datePickerStyle(.graphical)
+                .environment(\.timeZone, viewModel.observer.timeZone)
                 .padding()
-                .navigationTitle("时间旅行")
+                .navigationTitle("选择时间")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
@@ -90,13 +71,6 @@ struct TimeControlsView: View {
             }
             .presentationDetents([.medium, .large])
         }
-    }
-
-    private var playbackLabel: String {
-        if viewModel.playbackDaysPerSecond >= 1 { return "1 天/秒" }
-        if viewModel.playbackDaysPerSecond >= 1.0 / 24 { return "1 小时/秒" }
-        if viewModel.playbackDaysPerSecond >= 1.0 / 1440 { return "1 分钟/秒" }
-        return "1 秒/秒"
     }
 
     private func timeButton(symbol: String, label: String, action: @escaping () -> Void) -> some View {

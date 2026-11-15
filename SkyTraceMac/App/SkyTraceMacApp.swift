@@ -11,10 +11,15 @@ struct SkyTraceMacApp: App {
         reminderScheduler: UserNotificationScheduler()
     )
     @State private var uiState = MacUIState()
+    @State private var renderEnvironment = SkyRenderEnvironmentMonitor()
 
     var body: some Scene {
         WindowGroup("星迹 SkyTrace", id: "main") {
-            MacContentView(viewModel: viewModel, uiState: uiState)
+            MacContentView(
+                viewModel: viewModel,
+                uiState: uiState,
+                renderEnvironment: renderEnvironment
+            )
                 .frame(minWidth: 1100, minHeight: 720)
                 .preferredColorScheme(nil)
         }
@@ -31,9 +36,7 @@ struct SkyTraceMacApp: App {
         MenuBarExtra {
             MacMenuBarMenu(uiState: uiState)
         } label: {
-            Image("MenuBarIcon")
-                .renderingMode(.template)
-                .accessibilityLabel("星迹")
+            MacMenuBarLabel()
         }
         .menuBarExtraStyle(.menu)
     }
@@ -76,5 +79,27 @@ private struct MacMenuBarMenu: View {
     private func showMainWindow() {
         openWindow(id: "main")
         NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+}
+
+
+private struct MacMenuBarLabel: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Image("MenuBarIcon")
+            .renderingMode(.template)
+            .accessibilityLabel("星迹")
+            .onAppear {
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(100))
+                    let hasVisibleContentWindow = NSApplication.shared.windows.contains {
+                        $0.isVisible && $0.frame.height > 100
+                    }
+                    guard !hasVisibleContentWindow else { return }
+                    openWindow(id: "main")
+                    NSApplication.shared.activate(ignoringOtherApps: true)
+                }
+            }
     }
 }

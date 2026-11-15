@@ -12,43 +12,73 @@ struct MacSkySceneView: NSViewRepresentable {
     let starScale: Double
     let labelMagnitudeLimit: Double
     let showCardinals: Bool
-    let isTimePlaybackActive: Bool
+    let renderEnvironment: SkyRenderEnvironment
 
     let onCameraChange: (SkyCameraState) -> Void
     let onSelect: (String?) -> Void
     let onReset: () -> Void
+    let onDiagnosticsChange: (SkyRenderDiagnostics) -> Void
+    let onLabelReadinessChange: (Bool) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
     }
 
+    static func dismantleNSView(_ nsView: MacInteractiveSceneView, coordinator: Coordinator) {
+        nsView.tearDown()
+        coordinator.controller?.shutdown()
+        coordinator.controller = nil
+    }
+
     func makeNSView(context: Context) -> MacInteractiveSceneView {
         let view = MacInteractiveSceneView(frame: .zero)
-        let controller = SkySceneController(sceneView: view, catalog: catalog)
+        let controller = SkySceneController(
+            sceneView: view,
+            catalog: catalog,
+            labelVisibilityMode: .alwaysVisible
+        )
         context.coordinator.controller = controller
-        view.onLifecycleChange = { active, visible in
-            context.coordinator.setLifecycle(active: active, visible: visible)
+        controller.onDiagnosticsChange = { [weak coordinator = context.coordinator] diagnostics in
+            coordinator?.parent.onDiagnosticsChange(diagnostics)
         }
-        view.onInteractionStart = { context.coordinator.beginInteraction() }
-        view.onOrbit = { horizontal, vertical, _ in
-            context.coordinator.orbit(horizontal: horizontal, vertical: vertical)
+        controller.onLabelReadinessChange = { [weak coordinator = context.coordinator] ready in
+            coordinator?.parent.onLabelReadinessChange(ready)
         }
-        view.onScrollOrbit = { horizontal, vertical in
-            context.coordinator.scrollOrbit(horizontal: horizontal, vertical: vertical)
+        view.onLifecycleChange = { [weak coordinator = context.coordinator] active, visible in
+            coordinator?.setLifecycle(active: active, visible: visible)
         }
-        view.onZoom = { context.coordinator.zoom(by: $0) }
-        view.onRotate = { context.coordinator.rotate(by: $0) }
-        view.onInteractionEnd = { horizontalVelocity, verticalVelocity in
-            context.coordinator.endInteraction(
+        view.onInteractionStart = { [weak coordinator = context.coordinator] in
+            coordinator?.beginInteraction()
+        }
+        view.onOrbit = { [weak coordinator = context.coordinator] horizontal, vertical, _ in
+            coordinator?.orbit(horizontal: horizontal, vertical: vertical)
+        }
+        view.onScrollOrbit = { [weak coordinator = context.coordinator] horizontal, vertical in
+            coordinator?.scrollOrbit(horizontal: horizontal, vertical: vertical)
+        }
+        view.onZoom = { [weak coordinator = context.coordinator] in
+            coordinator?.zoom(by: $0)
+        }
+        view.onRotate = { [weak coordinator = context.coordinator] in
+            coordinator?.rotate(by: $0)
+        }
+        view.onInteractionEnd = { [weak coordinator = context.coordinator] horizontalVelocity, verticalVelocity in
+            coordinator?.endInteraction(
                 horizontalVelocity: horizontalVelocity,
                 verticalVelocity: verticalVelocity
             )
         }
-        view.onSelect = { point in context.coordinator.select(at: point) }
-        view.onReset = { context.coordinator.parent.onReset() }
-        view.onClear = { context.coordinator.parent.onSelect(nil) }
-        view.onKeyboardMove = { horizontal, vertical, zoom in
-            context.coordinator.nudge(horizontal: horizontal, vertical: vertical, zoom: zoom)
+        view.onSelect = { [weak coordinator = context.coordinator] point in
+            coordinator?.select(at: point)
+        }
+        view.onReset = { [weak coordinator = context.coordinator] in
+            coordinator?.parent.onReset()
+        }
+        view.onClear = { [weak coordinator = context.coordinator] in
+            coordinator?.parent.onSelect(nil)
+        }
+        view.onKeyboardMove = { [weak coordinator = context.coordinator] horizontal, vertical, zoom in
+            coordinator?.nudge(horizontal: horizontal, vertical: vertical, zoom: zoom)
         }
         context.coordinator.update()
         return view
@@ -69,7 +99,7 @@ struct MacSkySceneView: NSViewRepresentable {
         }
 
         func update() {
-            controller.setTimePlaybackActive(parent.isTimePlaybackActive)
+            controller.updateRenderEnvironment(parent.renderEnvironment)
             controller.update(
                 snapshot: parent.snapshot,
                 showConstellations: parent.showConstellations,
@@ -83,8 +113,12 @@ struct MacSkySceneView: NSViewRepresentable {
                 parent.camera,
                 selectedObjectID: parent.selectedObjectID
             )
-            controller.onCameraChange = parent.onCameraChange
-            controller.onCameraSettled = parent.onCameraChange
+            controller.onCameraChange = { [weak coordinator = self] state in
+                coordinator?.parent.onCameraChange(state)
+            }
+            controller.onCameraSettled = { [weak coordinator = self] state in
+                coordinator?.parent.onCameraChange(state)
+            }
         }
 
         func setLifecycle(active: Bool, visible: Bool) {
@@ -171,7 +205,6 @@ final class MacInteractiveSceneView: SCNView {
             onLifecycleChange?(false, false)
             return
         }
-
         let center = NotificationCenter.default
         lifecycleObservers = [
             center.addObserver(
@@ -215,6 +248,23 @@ final class MacInteractiveSceneView: SCNView {
 
     deinit {
         lifecycleObservers.forEach(NotificationCenter.default.removeObserver)
+        lifecycleObservers.removeAll(keepingCapacity: false)
+    }
+
+    func tearDown() {
+        lifecycleObservers.forEach(NotificationCenter.default.removeObserver)
+        lifecycleObservers.removeAll(keepingCapacity: false)
+        onLifecycleChange = nil
+        onInteractionStart = nil
+        onOrbit = nil
+        onScrollOrbit = nil
+        onZoom = nil
+        onRotate = nil
+        onInteractionEnd = nil
+        onSelect = nil
+        onClear = nil
+        onReset = nil
+        onKeyboardMove = nil
     }
 
     private func notifyLifecycleChange() {
@@ -234,6 +284,7 @@ final class MacInteractiveSceneView: SCNView {
         lastVerticalVelocity = 0
 
         if event.clickCount == 2 {
+            mouseDownPoint = nil
             onReset?()
         } else {
             onInteractionStart?()
@@ -241,6 +292,7 @@ final class MacInteractiveSceneView: SCNView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        guard mouseDownPoint != nil else { return }
         didDrag = true
         let horizontal = Double(event.deltaX) * 3
         let vertical = Double(-event.deltaY) * 3
@@ -255,8 +307,12 @@ final class MacInteractiveSceneView: SCNView {
     override func mouseUp(with event: NSEvent) {
         guard let point = mouseDownPoint else { return }
         if !didDrag {
-            onSelect?(point)
+            let skyPoint = CGPoint(
+                x: point.x - bounds.minX,
+                y: isFlipped ? point.y - bounds.minY : bounds.maxY - point.y
+            )
             onInteractionEnd?(0, 0)
+            onSelect?(skyPoint)
         } else {
             onInteractionEnd?(lastHorizontalVelocity, lastVerticalVelocity)
         }

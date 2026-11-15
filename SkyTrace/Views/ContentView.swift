@@ -4,6 +4,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Bindable var viewModel: SkyViewModel
+    @Bindable var renderEnvironment: RenderEnvironmentMonitor
     @Environment(\.scenePhase) private var scenePhase
 
     @AppStorage("SkyTrace.DidShowOnboarding") private var didShowOnboarding = false
@@ -37,7 +38,15 @@ struct ContentView: View {
             }
         }
         .task {
+            await viewModel.prepare()
             showOnboarding = !didShowOnboarding
+        }
+        .task(id: scenePhase) {
+            let isActive = scenePhase == .active
+            viewModel.setApplicationActive(isActive)
+            if isActive {
+                await viewModel.refreshAuthorizationStates()
+            }
         }
         .sheet(isPresented: $showOnboarding) {
             OnboardingView {
@@ -102,7 +111,7 @@ struct ContentView: View {
                 motionEnabled: viewModel.motionEnabled,
                 motionReading: viewModel.motionReading,
                 isApplicationActive: scenePhase == .active,
-                isTimePlaybackActive: viewModel.isPlaying,
+                renderEnvironment: renderEnvironment.environment,
                 onCameraChange: { viewModel.camera = $0 },
                 onTap: { objectID in
                     if let objectID {
@@ -152,6 +161,8 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("observer.header")
+            .accessibilityValue(viewModel.formattedMoment)
 
             SkyRoundIconButton(
                 systemName: "magnifyingglass",

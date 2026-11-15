@@ -9,6 +9,12 @@ struct SkyLabelVisual {
     let selected: Bool
 }
 
+struct SkyObjectLabelSeed {
+    let id: String
+    let text: String
+    let kind: CelestialKind
+}
+
 /// A fixed-size SpriteKit overlay. Text textures are created only when the
 /// text of a slot changes; the render loop only changes positions, colors and
 /// opacity.
@@ -46,8 +52,21 @@ final class SkyLabelOverlayScene: SKScene {
     private(set) var displayedObjectIDs: Set<String> = []
     private(set) var displayedCardinalIDs: Set<String> = []
     private var pendingVisibleTextIDs: Set<String> = []
-    private let maximumObjectNodes = 100
+
+    private var visibilityMode: SkyLabelVisibilityMode = .adaptive
+    private var objectNodeLimit = 100
+    private var stableObjectNodeIndices: [String: Int] = [:]
+    private var stableObjectSeeds: [String: SkyObjectLabelSeed] = [:]
+    private var pendingStableObjectSeeds: [SkyObjectLabelSeed] = []
+    private var pendingStableSeedIndex = 0
+    private var nodeVisibilityGeneration: [UInt64] = []
+    private var activeVisibilityGeneration: UInt64 = 0
+    private var previousVisibleNodeIndices: [Int] = []
+    private var reusableVisibleNodeIndices: [Int] = []
+
+    private let maximumAdaptiveObjectNodes = 100
     private let maximumTextUpdatesPerFrame = 4
+    private let alwaysVisibleTextUpdatesPerFrame = 8
     private let showHorizontalPadding: CGFloat = 6
     private let showVerticalPadding: CGFloat = 4
     private let stickyHorizontalInset: CGFloat = 2
@@ -55,8 +74,19 @@ final class SkyLabelOverlayScene: SKScene {
     private let positionQuantum: CGFloat = 0.25
 
     var hasPendingTextUpdates: Bool {
-        !pendingVisibleTextIDs.isEmpty || prewarmIndex < prewarmTexts.count
+        pendingStableSeedIndex < pendingStableObjectSeeds.count ||
+            !pendingVisibleTextIDs.isEmpty ||
+            prewarmIndex < prewarmTexts.count
     }
+
+    var pendingTextUpdateCount: Int {
+        max(0, pendingStableObjectSeeds.count - pendingStableSeedIndex) +
+            pendingVisibleTextIDs.count +
+            max(0, prewarmTexts.count - prewarmIndex)
+    }
+
+    var debugObjectNodeCount: Int { objectNodes.count }
+    var debugStableObjectNodeCount: Int { stableObjectNodeIndices.count }
 
     override init(size: CGSize) {
         super.init(size: size)
@@ -95,22 +125,245 @@ final class SkyLabelOverlayScene: SKScene {
         }
     }
 
+    func configure(visibilityMode: SkyLabelVisibilityMode) {
+        self.visibilityMode = visibilityMode
+        objectNodeLimit = visibilityMode == .adaptive
+            ? maximumAdaptiveObjectNodes
+            : max(stableObjectNodeIndices.count, objectNodes.count)
+        if visibilityMode == .alwaysVisible, !stableObjectSeeds.isEmpty {
+            prepareObjectLabels(Array(stableObjectSeeds.values))
+        }
+    }
+
     func queuePrewarm(texts: [String]) {
+        guard visibilityMode == .adaptive else { return }
         var seen = Set<String>()
         prewarmTexts = texts.filter { !$0.isEmpty && seen.insert($0).inserted }
         prewarmIndex = 0
     }
 
+    /// Binds stable object IDs to reusable nodes. In always-visible mode the
+    /// complete label source set is materialized once so manual time changes
+    /// never need to allocate or evict nodes.
+    func prepareObjectLabels(_ seeds: [SkyObjectLabelSeed]) {
+        guard visibilityMode == .alwaysVisible else {
+            queuePrewarm(texts: seeds.prefix(maximumAdaptiveObjectNodes).map(\.text))
+            return
+        }
+
+        stableObjectSeeds = Dictionary(
+            uniqueKeysWithValues: seeds.map { ($0.id, $0) }
+        )
+        ensureStableObjectNodes(for: seeds)
+        pendingStableObjectSeeds = seeds.filter { seed in
+            guard let index = stableObjectNodeIndices[seed.id] else { return true }
+            return objectNodes[index].text != seed.text
+        }
+        pendingStableSeedIndex = 0
+        objectNodeLimit = max(objectNodeLimit, stableObjectNodeIndices.count)
+    }
+
+    func trimIdleResources() {
+        if visibilityMode == .alwaysVisible {
+            trimOffscreenLabels()
+            return
+        }
+        prewarmTexts.removeAll(keepingCapacity: false)
+        prewarmIndex = 0
+        prewarmNode?.text = ""
+        pendingVisibleTextIDs.removeAll()
+
+        for index in idleObjectNodeIndices {
+            guard objectNodes.indices.contains(index) else { continue }
+            objectNodes[index].text = ""
+            objectNodeStyles[index] = nil
+            objectNodeSizes[index] = nil
+            objectNodes[index].isHidden = true
+        }
+        cardinalNodeSizes = Array(repeating: nil, count: cardinalNodes.count)
+    }
+
+    private func trimOffscreenLabels() {
+        let visibleIndices = Set(displayedObjectIDs.compactMap { stableObjectNodeIndices[$0] })
+        pendingStableObjectSeeds.removeAll(keepingCapacity: true)
+        pendingStableSeedIndex = 0
+
+        for index in objectNodes.indices where !visibleIndices.contains(index) {
+            objectNodes[index].text = ""
+            objectNodes[index].isHidden = true
+            objectNodeSizes[index] = nil
+            objectNodeStyles[index] = nil
+        }
+        cardinalNodeSizes = Array(repeating: nil, count: cardinalNodes.count)
+    }
+
     func apply(visuals: [SkyLabelVisual], cardinals: [SkyLabelVisual]) {
+        let textBudget = visibilityMode == .alwaysVisible
+            ? alwaysVisibleTextUpdatesPerFrame
+            : maximumTextUpdatesPerFrame
+        var textUpdates = processPendingStableObjectSeeds(limit: textBudget)
+
+        if visibilityMode == .alwaysVisible {
+            applyAlwaysVisible(
+                visuals: visuals,
+                cardinals: cardinals,
+                textUpdates: &textUpdates,
+                textBudget: textBudget
+            )
+        } else {
+            applyAdaptive(
+                visuals: visuals,
+                cardinals: cardinals,
+                textUpdates: &textUpdates
+            )
+        }
+
+        lastTextUpdateCount = textUpdates
+    }
+
+    private func processPendingStableObjectSeeds(limit: Int) -> Int {
+        var updates = 0
+        while updates < limit, pendingStableSeedIndex < pendingStableObjectSeeds.count {
+            let seed = pendingStableObjectSeeds[pendingStableSeedIndex]
+            pendingStableSeedIndex += 1
+            guard let index = stableObjectNodeIndices[seed.id] else { continue }
+            let node = objectNodes[index]
+            if node.text != seed.text {
+                node.text = seed.text
+                objectNodeSizes[index] = nil
+                updates += 1
+            }
+            applyStyleIfNeeded(Self.style(for: seed.kind, selected: false), to: index)
+        }
+        if pendingStableSeedIndex == pendingStableObjectSeeds.count {
+            pendingStableObjectSeeds.removeAll(keepingCapacity: true)
+            pendingStableSeedIndex = 0
+        }
+        return updates
+    }
+
+    private func ensureStableObjectNodes(for seeds: [SkyObjectLabelSeed]) {
+        for seed in seeds where stableObjectNodeIndices[seed.id] == nil {
+            let node = SKLabelNode()
+            node.fontName = "PingFangSC-Regular"
+            node.fontSize = 11
+            node.horizontalAlignmentMode = .center
+            node.verticalAlignmentMode = .center
+            node.isHidden = true
+            node.zPosition = 2
+            addChild(node)
+
+            let index = objectNodes.count
+            objectNodes.append(node)
+            objectNodeSizes.append(nil)
+            objectNodeHasPosition.append(false)
+            objectNodeStyles.append(nil)
+            nodeVisibilityGeneration.append(0)
+            stableObjectNodeIndices[seed.id] = index
+        }
+    }
+
+    private func applyAlwaysVisible(
+        visuals: [SkyLabelVisual],
+        cardinals: [SkyLabelVisual],
+        textUpdates: inout Int,
+        textBudget: Int
+    ) {
+        activeVisibilityGeneration &+= 1
+        reusableVisibleNodeIndices.removeAll(keepingCapacity: true)
+        displayedObjectIDs.removeAll(keepingCapacity: true)
+
+        for visual in visuals {
+            guard
+                let index = stableObjectNodeIndices[visual.id],
+                objectNodes.indices.contains(index)
+            else { continue }
+
+            let node = objectNodes[index]
+            node.position = stabilizedPoint(
+                visual.point,
+                current: node.position,
+                hasPosition: objectNodeHasPosition[index]
+            )
+            objectNodeHasPosition[index] = true
+
+            if node.text != visual.text {
+                guard textUpdates < textBudget else {
+                    node.isHidden = true
+                    continue
+                }
+                node.text = visual.text
+                objectNodeSizes[index] = nil
+                textUpdates += 1
+            }
+
+            applyStyleIfNeeded(
+                Self.style(for: visual.kind, selected: visual.selected),
+                to: index
+            )
+            let placement = visibleLabelPlacement(
+                for: node,
+                cachedSize: objectNodeSizes[index],
+                center: node.position
+            )
+            node.position = placement.center
+            objectNodeSizes[index] = placement.size
+            node.isHidden = false
+            node.zPosition = visual.selected ? 4 : 2
+            nodeVisibilityGeneration[index] = activeVisibilityGeneration
+            reusableVisibleNodeIndices.append(index)
+            displayedObjectIDs.insert(visual.id)
+        }
+
+        for index in previousVisibleNodeIndices
+        where nodeVisibilityGeneration.indices.contains(index) &&
+            nodeVisibilityGeneration[index] != activeVisibilityGeneration {
+            objectNodes[index].isHidden = true
+        }
+        swap(&previousVisibleNodeIndices, &reusableVisibleNodeIndices)
+
+        displayedCardinalIDs.removeAll(keepingCapacity: true)
+        for (index, node) in cardinalNodes.enumerated() {
+            guard index < cardinals.count else {
+                node.isHidden = true
+                continue
+            }
+            let visual = cardinals[index]
+            node.position = stabilizedPoint(
+                visual.point,
+                current: node.position,
+                hasPosition: cardinalNodeHasPosition[index]
+            )
+            cardinalNodeHasPosition[index] = true
+            if node.text != visual.text {
+                node.text = visual.text
+                cardinalNodeSizes[index] = nil
+            }
+            let placement = visibleLabelPlacement(
+                for: node,
+                cachedSize: cardinalNodeSizes[index],
+                center: node.position
+            )
+            node.position = placement.center
+            cardinalNodeSizes[index] = placement.size
+            node.isHidden = false
+            displayedCardinalIDs.insert(visual.id)
+        }
+    }
+
+    private func applyAdaptive(
+        visuals: [SkyLabelVisual],
+        cardinals: [SkyLabelVisual],
+        textUpdates: inout Int
+    ) {
         let previouslyDisplayedObjectIDs = displayedObjectIDs
         let previouslyDisplayedCardinalIDs = displayedCardinalIDs
-        var textUpdates = 0
         var assignedObjectIDs = Set<String>()
         var nextPendingVisibleTextIDs = Set<String>()
         var preparedLabels: [PreparedObjectLabel] = []
-        preparedLabels.reserveCapacity(min(visuals.count, maximumObjectNodes))
+        preparedLabels.reserveCapacity(min(visuals.count, objectNodeLimit))
 
-        for visual in visuals.prefix(maximumObjectNodes) {
+        for visual in visuals.prefix(objectNodeLimit) {
             guard let index = objectNodeIndex(for: visual.id) else { continue }
             assignedObjectIDs.insert(visual.id)
             let node = objectNodes[index]
@@ -184,10 +437,16 @@ final class SkyLabelOverlayScene: SKScene {
                 textUpdates += 1
             }
 
-            let wasVisible = previouslyDisplayedCardinalIDs.contains(visual.id)
-            let collision = collisionFrames(
+            let placement = visibleLabelPlacement(
                 for: node,
                 cachedSize: cardinalNodeSizes[index],
+                center: node.position
+            )
+            node.position = placement.center
+            cardinalNodeSizes[index] = placement.size
+            let wasVisible = previouslyDisplayedCardinalIDs.contains(visual.id)
+            let collision = collisionFrames(
+                size: placement.size,
                 center: node.position
             )
             let candidateFrame = wasVisible ? collision.sticky : collision.show
@@ -196,7 +455,6 @@ final class SkyLabelOverlayScene: SKScene {
                 node.isHidden = true
                 continue
             }
-            cardinalNodeSizes[index] = collision.size
             occupiedShowFrames.append(collision.show)
             occupiedStickyFrames.append(collision.sticky)
             displayedCardinalIDs.insert(visual.id)
@@ -218,7 +476,6 @@ final class SkyLabelOverlayScene: SKScene {
             textUpdates += 1
         }
         pendingVisibleTextIDs = nextPendingVisibleTextIDs
-        lastTextUpdateCount = textUpdates
     }
 
     private func placeObjectLabel(
@@ -234,11 +491,14 @@ final class SkyLabelOverlayScene: SKScene {
             hasPosition: objectNodeHasPosition[label.nodeIndex]
         )
         objectNodeHasPosition[label.nodeIndex] = true
-        let collision = collisionFrames(
+        let placement = visibleLabelPlacement(
             for: node,
             cachedSize: objectNodeSizes[label.nodeIndex],
             center: node.position
         )
+        node.position = placement.center
+        objectNodeSizes[label.nodeIndex] = placement.size
+        let collision = collisionFrames(size: placement.size, center: node.position)
 
         if !label.visual.selected {
             let candidateFrame = wasVisible ? collision.sticky : collision.show
@@ -249,7 +509,6 @@ final class SkyLabelOverlayScene: SKScene {
             }
         }
 
-        objectNodeSizes[label.nodeIndex] = collision.size
         occupiedShowFrames.append(collision.show)
         occupiedStickyFrames.append(collision.sticky)
         displayedObjectIDs.insert(label.visual.id)
@@ -287,8 +546,12 @@ final class SkyLabelOverlayScene: SKScene {
     }
 
     private static func style(for visual: SkyLabelVisual) -> LabelStyle {
-        if visual.selected { return .selected }
-        switch visual.kind {
+        style(for: visual.kind, selected: visual.selected)
+    }
+
+    private static func style(for kind: CelestialKind, selected: Bool) -> LabelStyle {
+        if selected { return .selected }
+        switch kind {
         case .constellation:
             return .constellation
         case .deepSky:
@@ -300,11 +563,11 @@ final class SkyLabelOverlayScene: SKScene {
         }
     }
 
-    private func collisionFrames(
+    private func visibleLabelPlacement(
         for node: SKLabelNode,
         cachedSize: CGSize?,
         center: CGPoint
-    ) -> (show: CGRect, sticky: CGRect, size: CGSize) {
+    ) -> (center: CGPoint, size: CGSize) {
         let size: CGSize
         if let cachedSize {
             size = cachedSize
@@ -316,6 +579,19 @@ final class SkyLabelOverlayScene: SKScene {
                 height: max(measured.height, node.fontSize)
             )
         }
+        let halfWidth = min(size.width * 0.5, self.size.width * 0.5)
+        let halfHeight = min(size.height * 0.5, self.size.height * 0.5)
+        let clamped = CGPoint(
+            x: min(max(center.x, halfWidth), max(halfWidth, self.size.width - halfWidth)),
+            y: min(max(center.y, halfHeight), max(halfHeight, self.size.height - halfHeight))
+        )
+        return (clamped, size)
+    }
+
+    private func collisionFrames(
+        size: CGSize,
+        center: CGPoint
+    ) -> (show: CGRect, sticky: CGRect) {
         let baseFrame = CGRect(
             x: center.x - size.width * 0.5,
             y: center.y - size.height * 0.5,
@@ -324,7 +600,7 @@ final class SkyLabelOverlayScene: SKScene {
         )
         let showFrame = baseFrame.insetBy(dx: -showHorizontalPadding, dy: -showVerticalPadding)
         let stickyFrame = baseFrame.insetBy(dx: stickyHorizontalInset, dy: stickyVerticalInset)
-        return (showFrame, stickyFrame, size)
+        return (showFrame, stickyFrame)
     }
 
     private func stabilizedPoint(
@@ -342,8 +618,29 @@ final class SkyLabelOverlayScene: SKScene {
     }
 
     func debugObjectPoint(for objectID: String) -> CGPoint? {
+        if visibilityMode == .alwaysVisible,
+           let index = stableObjectNodeIndices[objectID] {
+            return objectNodes[index].position
+        }
         guard let index = activeObjectNodes[objectID] else { return nil }
         return objectNodes[index].position
+    }
+
+    func debugObjectFrame(for objectID: String) -> CGRect? {
+        let index: Int?
+        if visibilityMode == .alwaysVisible {
+            index = stableObjectNodeIndices[objectID]
+        } else {
+            index = activeObjectNodes[objectID]
+        }
+        guard let index, objectNodes.indices.contains(index) else { return nil }
+        return objectNodes[index].calculateAccumulatedFrame()
+    }
+
+    func debugObjectHasText(_ objectID: String) -> Bool {
+        let index = stableObjectNodeIndices[objectID] ?? activeObjectNodes[objectID]
+        guard let index, objectNodes.indices.contains(index) else { return false }
+        return !(objectNodes[index].text ?? "").isEmpty
     }
 
     private func objectNodeIndex(for objectID: String) -> Int? {
@@ -354,7 +651,7 @@ final class SkyLabelOverlayScene: SKScene {
             activeObjectNodes[objectID] = index
             return index
         }
-        guard objectNodes.count < maximumObjectNodes else { return nil }
+        guard objectNodes.count < objectNodeLimit else { return nil }
         let node = SKLabelNode()
         node.fontName = "PingFangSC-Regular"
         node.fontSize = 11
@@ -367,6 +664,7 @@ final class SkyLabelOverlayScene: SKScene {
         objectNodeSizes.append(nil)
         objectNodeHasPosition.append(false)
         objectNodeStyles.append(nil)
+        nodeVisibilityGeneration.append(0)
         let index = objectNodes.count - 1
         activeObjectNodes[objectID] = index
         return index

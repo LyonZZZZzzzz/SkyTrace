@@ -1,3 +1,4 @@
+import CoreLocation
 import XCTest
 @testable import SkyTraceCore
 
@@ -9,6 +10,58 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(catalog.constellations.count, 88)
         XCTAssertEqual(catalog.deepSkyObjects.count, 110)
         XCTAssertFalse(catalog.search("M42").isEmpty)
+    }
+
+    func testCatalogValidationRejectsDuplicateStarIDs() throws {
+        let star = StarRecord(
+            hr: 1,
+            hip: 1,
+            raDegrees: 10,
+            decDegrees: 20,
+            magnitude: 2,
+            bvColorIndex: 0.5
+        )
+
+        XCTAssertThrowsError(
+            try CatalogRepository.validate(
+                stars: [star, star],
+                labels: [],
+                constellations: [],
+                deepSkyObjects: [],
+                cities: [],
+                enforceExpectedCounts: false
+            )
+        ) { error in
+            guard case CatalogLoadError.invalidRecord = error else {
+                return XCTFail("Expected invalidRecord, got \(error)")
+            }
+        }
+    }
+
+    func testCatalogValidationRejectsNonFiniteCoordinates() throws {
+        let star = StarRecord(
+            hr: 1,
+            hip: 1,
+            raDegrees: .nan,
+            decDegrees: 20,
+            magnitude: 2,
+            bvColorIndex: 0.5
+        )
+
+        XCTAssertThrowsError(
+            try CatalogRepository.validate(
+                stars: [star],
+                labels: [],
+                constellations: [],
+                deepSkyObjects: [],
+                cities: [],
+                enforceExpectedCounts: false
+            )
+        ) { error in
+            guard case CatalogLoadError.invalidRecord = error else {
+                return XCTFail("Expected invalidRecord, got \(error)")
+            }
+        }
     }
 
     func testCameraStateDirectionAndRollProjection() {
@@ -73,7 +126,18 @@ final class CoreTests: XCTestCase {
     }
 
     @MainActor
-    func testApplicationLifecyclePausesPlaybackAndMotion() throws {
+    func testViewModelDefaultsToCurrentTime() throws {
+        let before = Date()
+        let viewModel = SkyViewModel(catalog: try CatalogRepository())
+        let after = Date()
+
+        XCTAssertGreaterThanOrEqual(viewModel.moment.date, before)
+        XCTAssertLessThanOrEqual(viewModel.moment.date, after)
+        XCTAssertEqual(viewModel.snapshot.moment.date, viewModel.moment.date)
+    }
+
+    @MainActor
+    func testApplicationLifecyclePausesMotionAndResetsToNowWhenActive() throws {
         let motion = TestMotionProvider()
         let viewModel = SkyViewModel(
             locationService: CoreLocationService(),
@@ -82,24 +146,30 @@ final class CoreTests: XCTestCase {
             catalog: try CatalogRepository()
         )
         viewModel.motionEnabled = true
-        viewModel.togglePlayback()
-
         XCTAssertTrue(motion.isActive)
-        XCTAssertTrue(viewModel.isPlaying)
 
+        viewModel.setDate(Date(timeIntervalSince1970: 1_000_000))
         viewModel.setApplicationActive(false)
         XCTAssertFalse(motion.isActive)
-        XCTAssertFalse(viewModel.isPlaying)
 
         viewModel.setApplicationActive(true)
         XCTAssertTrue(motion.isActive)
-        XCTAssertTrue(viewModel.isPlaying)
-
-        viewModel.togglePlayback()
+        XCTAssertEqual(viewModel.moment.date.timeIntervalSinceNow, 0, accuracy: 1)
     }
 
     @MainActor
-    func testViewModelTimeTravelUsesSharedCore() async throws {
+    func testManualTimeSelectionClampsToSupportedRange() throws {
+        let viewModel = SkyViewModel(catalog: try CatalogRepository())
+
+        viewModel.setDate(viewModel.dateRange.upperBound.addingTimeInterval(86_400))
+        XCTAssertEqual(viewModel.moment.date, viewModel.dateRange.upperBound)
+
+        viewModel.setDate(viewModel.dateRange.lowerBound.addingTimeInterval(-86_400))
+        XCTAssertEqual(viewModel.moment.date, viewModel.dateRange.lowerBound)
+    }
+
+    @MainActor
+    func testViewModelManualTimeSelectionUsesSharedCore() async throws {
         let viewModel = try XCTUnwrap(SkyViewModel(catalog: try CatalogRepository()) as SkyViewModel?)
         let original = viewModel.moment.date
         viewModel.shiftTime(by: 3_600)
@@ -110,32 +180,65 @@ final class CoreTests: XCTestCase {
     }
 
     @MainActor
-    func testPlaybackRatesUseDaysPerElapsedSecond() throws {
-        let viewModel = SkyViewModel(catalog: try CatalogRepository())
-        XCTAssertEqual(viewModel.playbackDaysPerSecond, 1.0)
-        let original = viewModel.moment.date
+    func testLocationServiceFiltersLowAccuracySamples() async {
+        let service = CoreLocationService()
+        var received: [LocationSample] = []
+        service.onLocationUpdate = { received.append($0) }
+        let manager = CLLocationManager()
+        let invalid = CLLocation(
+            coordinate: CLLocationCoordinate2D(latitude: 31.2, longitude: 121.4),
+            altitude: 0,
+            horizontalAccuracy: 100_000,
+            verticalAccuracy: -1,
+            timestamp: Date()
+        )
 
-        viewModel.advancePlayback(byElapsedSeconds: 1)
-        XCTAssertEqual(viewModel.moment.date.timeIntervalSince(original), 86_400, accuracy: 0.000_001)
+        service.locationManager(manager, didUpdateLocations: [invalid])
+        try? await Task.sleep(for: .milliseconds(20))
+        XCTAssertTrue(received.isEmpty)
 
-        viewModel.playbackDaysPerSecond = SkyViewModel.realTimePlaybackDaysPerSecond
-        let realtimeStart = viewModel.moment.date
-        viewModel.advancePlayback(byElapsedSeconds: 1)
-        XCTAssertEqual(viewModel.moment.date.timeIntervalSince(realtimeStart), 1, accuracy: 0.000_001)
+        let valid = CLLocation(
+            coordinate: CLLocationCoordinate2D(latitude: 31.2, longitude: 121.4),
+            altitude: 4,
+            horizontalAccuracy: 1_000,
+            verticalAccuracy: -1,
+            timestamp: Date()
+        )
+        service.locationManager(manager, didUpdateLocations: [valid])
+        try? await Task.sleep(for: .milliseconds(20))
 
-        viewModel.advancePlayback(byElapsedSeconds: 60)
-        XCTAssertEqual(viewModel.moment.date.timeIntervalSince(realtimeStart), 61, accuracy: 0.000_001)
+        XCTAssertEqual(received.count, 1)
+        XCTAssertEqual(received.first?.latitude ?? 0, 31.2, accuracy: 0.000_1)
+        XCTAssertEqual(received.first?.longitude ?? 0, 121.4, accuracy: 0.000_1)
     }
 
-    @MainActor
-    func testRealtimePlaybackWrapsAtUpperDateBound() throws {
-        let viewModel = SkyViewModel(catalog: try CatalogRepository())
-        viewModel.playbackDaysPerSecond = SkyViewModel.realTimePlaybackDaysPerSecond
-        viewModel.setDate(viewModel.dateRange.upperBound)
+    func testCancelledPlannersReturnNoStaleResults() async throws {
+        let catalog = try CatalogRepository()
+        let moment = SkyMoment.now
+        let plannerTask = Task {
+            await ObservationPlanner().makePlan(
+                for: moment,
+                observer: .shanghai,
+                candidates: catalog.allObjects,
+                favoriteIDs: [],
+                minimumAltitude: 10
+            )
+        }
+        plannerTask.cancel()
+        let plan = await plannerTask.value
+        XCTAssertTrue(plan.recommendations.isEmpty)
 
-        viewModel.advancePlayback(byElapsedSeconds: 1)
-
-        XCTAssertEqual(viewModel.moment.date, viewModel.dateRange.lowerBound)
+        let eventTask = Task {
+            await AstronomyEventPlanner().events(
+                from: moment.date,
+                through: moment.date.addingTimeInterval(120 * 24 * 3600),
+                observer: .shanghai,
+                objects: catalog.allObjects
+            )
+        }
+        eventTask.cancel()
+        let events = await eventTask.value
+        XCTAssertTrue(events.isEmpty)
     }
 }
 

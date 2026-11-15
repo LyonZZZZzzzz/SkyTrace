@@ -13,13 +13,18 @@ public struct SkyFrameMetrics: Sendable {
     public private(set) var lastFrameInterval: Double = 0
     public private(set) var consecutiveSlowFrames = 0
     public private(set) var longestSlowFrameRun = 0
+    public private(set) var longestFrameInterval: Double = 0
+    public private(set) var mainThreadStallCount = 0
     public private(set) var measuredFrameCount = 0
+    public var sampleWindowCount: Int { sampleCount }
 
     private var lastFrameTimestamp: TimeInterval?
     private let sampleCapacity: Int
     private var samples: [Double]
     private var writeIndex = 0
     private var sampleCount = 0
+    private var intervalHistogram = Array(repeating: UInt64(0), count: 4_096)
+    private var cumulativeFrameCount: UInt64 = 0
 
     public init(sampleCapacity: Int = 240) {
         self.sampleCapacity = max(sampleCapacity, 1)
@@ -41,12 +46,33 @@ public struct SkyFrameMetrics: Sendable {
         percentile(0.99)
     }
 
+    public var cumulativeP95FrameInterval: Double {
+        histogramPercentile(0.95)
+    }
+
+    public var cumulativeP99FrameInterval: Double {
+        histogramPercentile(0.99)
+    }
+
+    public var cumulativeMeasuredFrameCount: UInt64 { cumulativeFrameCount }
+
     public mutating func recordFrame(at timestamp: TimeInterval) {
-        defer { lastFrameTimestamp = timestamp }
-        guard let lastFrameTimestamp else { return }
-        let interval = max(timestamp - lastFrameTimestamp, 0)
+        guard timestamp.isFinite else { return }
+        guard let lastFrameTimestamp else {
+            self.lastFrameTimestamp = timestamp
+            return
+        }
+        let interval = timestamp - lastFrameTimestamp
+        guard interval.isFinite, interval > 0 else { return }
+        self.lastFrameTimestamp = timestamp
         lastFrameInterval = interval
+        longestFrameInterval = max(longestFrameInterval, interval)
+        if interval >= 2 {
+            mainThreadStallCount += 1
+        }
         measuredFrameCount += 1
+        cumulativeFrameCount &+= 1
+        intervalHistogram[histogramIndex(for: interval)] &+= 1
         samples[writeIndex] = interval
         writeIndex = (writeIndex + 1) % sampleCapacity
         sampleCount = min(sampleCount + 1, sampleCapacity)
@@ -84,7 +110,11 @@ public struct SkyFrameMetrics: Sendable {
         dynamicNodeUpdateCount = 0
         labelProjectionDuration = 0
         longestSlowFrameRun = 0
+        longestFrameInterval = 0
+        mainThreadStallCount = 0
         measuredFrameCount = 0
+        intervalHistogram = Array(repeating: 0, count: intervalHistogram.count)
+        cumulativeFrameCount = 0
     }
 
     private func percentile(_ value: Double) -> Double {
@@ -93,6 +123,24 @@ public struct SkyFrameMetrics: Sendable {
         let sorted = values.sorted()
         let index = min(sorted.count - 1, max(0, Int(ceil(value * Double(sorted.count))) - 1))
         return sorted[index]
+    }
+
+    private func histogramIndex(for interval: TimeInterval) -> Int {
+        let bucket = (interval / 0.000_5).rounded(.down)
+        return Int(min(bucket, Double(intervalHistogram.count - 1)))
+    }
+
+    private func histogramPercentile(_ percentile: Double) -> Double {
+        guard cumulativeFrameCount > 0 else { return 0 }
+        let target = UInt64(ceil(percentile * Double(cumulativeFrameCount)))
+        var running: UInt64 = 0
+        for (index, count) in intervalHistogram.enumerated() {
+            running &+= count
+            if running >= target {
+                return Double(index) * 0.000_5 + 0.000_25
+            }
+        }
+        return Double(intervalHistogram.count) * 0.000_5
     }
 
     private func orderedSamples() -> [Double] {

@@ -16,3 +16,41 @@ public enum SkyTraceDiagnostics {
         signposter.emitEvent(name)
     }
 }
+
+final class SkyRendererLifecycleTrace: Sendable {
+    private static let enabled = ProcessInfo.processInfo.arguments.contains("--trace-renderer-lifecycle")
+    private static let signposter = OSSignposter(
+        subsystem: SkyTraceDiagnostics.subsystem,
+        category: "PointsOfInterest"
+    )
+
+    private let id = signposter.makeSignpostID()
+    private let awaitingFirstFrame = OSAllocatedUnfairLock(initialState: false)
+
+    static func makeIfEnabled() -> SkyRendererLifecycleTrace? {
+        enabled ? SkyRendererLifecycleTrace() : nil
+    }
+
+    func event(_ name: StaticString) {
+        Self.signposter.emitEvent(name, id: id)
+    }
+
+    func awaitFirstFrame() {
+        awaitingFirstFrame.withLock { awaiting in
+            event("RendererResumeRequested")
+            awaiting = true
+        }
+    }
+
+    func cancelFirstFrame() {
+        awaitingFirstFrame.withLock { $0 = false }
+    }
+
+    func recordFirstFrame() {
+        awaitingFirstFrame.withLock { awaiting in
+            guard awaiting else { return }
+            awaiting = false
+            event("RendererFirstFrameAfterResume")
+        }
+    }
+}

@@ -105,8 +105,12 @@ public actor ObservationLogRepository {
         do {
             let data = try Data(contentsOf: fileURL)
             let decoded = try decoder.decode([ObservationLogEntry].self, from: data)
-            entries = decoded
-            return decoded
+            let sanitized = decoded.map(Self.sanitized)
+            entries = sanitized
+            if sanitized != decoded {
+                try? persist(sanitized)
+            }
+            return sanitized
         } catch {
             try backupCorruptFile()
             entries = []
@@ -130,9 +134,34 @@ public actor ObservationLogRepository {
     private func backupCorruptFile() throws {
         let directory = fileURL.deletingLastPathComponent()
         let timestamp = Int(Date().timeIntervalSince1970)
-        let backup = directory.appendingPathComponent("observation-log-corrupt-\(timestamp).json")
+        let identifier = UUID().uuidString.lowercased()
+        let backup = directory.appendingPathComponent(
+            "observation-log-corrupt-\(timestamp)-\(identifier).json"
+        )
         if fileManager.fileExists(atPath: fileURL.path) {
             try fileManager.moveItem(at: fileURL, to: backup)
         }
+    }
+
+    private static func sanitized(_ entry: ObservationLogEntry) -> ObservationLogEntry {
+        var value = entry
+        value.rating = min(5, max(1, value.rating))
+        value.latitude = value.latitude.isFinite ? min(90, max(-90, value.latitude)) : 0
+        value.longitude = value.longitude.isFinite ? min(180, max(-180, value.longitude)) : 0
+        value.objectID = value.objectID.trimmingCharacters(in: .whitespacesAndNewlines)
+        value.objectName = value.objectName.trimmingCharacters(in: .whitespacesAndNewlines)
+        value.observerName = value.observerName.trimmingCharacters(in: .whitespacesAndNewlines)
+        value.notes = value.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if value.objectID.isEmpty { value.objectID = "unknown" }
+        if value.objectName.isEmpty { value.objectName = "未知目标" }
+        if value.observerName.isEmpty { value.observerName = "未知地点" }
+        if TimeZone(identifier: value.timeZoneIdentifier) == nil {
+            value.timeZoneIdentifier = "UTC"
+        }
+        if value.updatedAt < value.createdAt {
+            value.updatedAt = value.createdAt
+        }
+        return value
     }
 }

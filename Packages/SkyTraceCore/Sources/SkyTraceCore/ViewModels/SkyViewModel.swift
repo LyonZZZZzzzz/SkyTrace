@@ -7,6 +7,12 @@ public enum CatalogState: Equatable, Sendable {
     case failed(String)
 }
 
+private struct PreparedCatalog: Sendable {
+    let repository: CatalogRepository
+    let sceneCatalog: SkySceneCatalog
+    let snapshot: SkySnapshot
+}
+
 @MainActor
 @Observable
 public final class SkyViewModel {
@@ -24,10 +30,6 @@ public final class SkyViewModel {
     public var toastMessage: String?
 
     public var camera = SkyCameraState()
-    public var isPlaying = false
-    public var playbackDaysPerSecond = 1.0
-    public static let realTimePlaybackDaysPerSecond = 1.0 / 86_400.0
-
     public private(set) var motionReading: SkyMotionReading?
     public private(set) var locationAuthorization: SkyLocationAuthorizationStatus = .notDetermined
     public private(set) var locationErrorMessage: String?
@@ -56,18 +58,26 @@ public final class SkyViewModel {
     @ObservationIgnored private let astronomy: any AstronomyCalculating
     @ObservationIgnored private let planner: any ObservationPlanning
     @ObservationIgnored private let snapshotWorker = SkySnapshotWorker()
-    @ObservationIgnored private var playbackTask: Task<Void, Never>?
+    @ObservationIgnored private var preparationTask: Task<Void, Never>?
     @ObservationIgnored private var snapshotTask: Task<Void, Never>?
     @ObservationIgnored private var snapshotBuildInFlight = false
     @ObservationIgnored private var snapshotGeneration: UInt64 = 0
     @ObservationIgnored private var pendingSnapshotRefresh: Bool?
-    @ObservationIgnored private var snapshotWaiters: [CheckedContinuation<Void, Never>] = []
+    @ObservationIgnored private var snapshotWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
     @ObservationIgnored private var toastTask: Task<Void, Never>?
     @ObservationIgnored private var planTask: Task<Void, Never>?
     @ObservationIgnored private var eventTask: Task<Void, Never>?
+    @ObservationIgnored private var scheduledReminderIDs: Set<String> = []
     @ObservationIgnored private var applicationIsActive = true
-    @ObservationIgnored private var resumePlaybackAfterForeground = false
+    @ObservationIgnored private var observationPlanRefreshDeferred = false
+    @ObservationIgnored private var astronomyEventRefreshDeferred = false
     @ObservationIgnored private var tonightDataRequested = false
+    @ObservationIgnored private let momentFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_Hans_CN")
+        formatter.dateFormat = "M月d日 EEEE HH:mm"
+        return formatter
+    }()
 
     public convenience init() {
         self.init(
@@ -113,35 +123,23 @@ public final class SkyViewModel {
             sceneCatalog = SkySceneCatalog(objects: catalog.allObjects, constellations: catalog.constellations)
             catalogState = .ready
             refreshSnapshot(updateObservationPlan: false)
-        } else {
-            do {
-                let loadedCatalog = try CatalogRepository()
-                repository = loadedCatalog
-                sceneCatalog = SkySceneCatalog(
-                    objects: loadedCatalog.allObjects,
-                    constellations: loadedCatalog.constellations
-                )
-                catalogState = .ready
-                refreshSnapshot(updateObservationPlan: false)
-            } catch {
-                catalogState = .failed(error.localizedDescription)
-            }
         }
 
         bindServices()
-        self.favoriteStore.removeUnknownFavorites(
-            validIDs: Set(repository?.allObjects.map(\.id) ?? [])
-        )
+        if let repository {
+            self.favoriteStore.removeUnknownFavorites(
+                validIDs: Set(repository.allObjects.map(\.id))
+            )
+        }
         Task { @MainActor [weak self] in
             guard let self else { return }
-            await self.reminderScheduler.refreshAuthorizationStatus()
-            self.reminderAuthorization = self.reminderScheduler.authorizationStatus
+            await self.refreshAuthorizationStates()
             await self.loadObservationLogs()
         }
     }
 
     deinit {
-        playbackTask?.cancel()
+        preparationTask?.cancel()
         snapshotTask?.cancel()
         toastTask?.cancel()
         planTask?.cancel()
@@ -246,6 +244,7 @@ public final class SkyViewModel {
         let enabled = favoriteStore.toggleFavorite(object.id)
         if !enabled {
             reminderScheduler.removeReminder(objectID: object.id)
+            scheduledReminderIDs.remove(object.id)
         }
         refreshPlanIfTonightDataRequested()
     }
@@ -254,6 +253,7 @@ public final class SkyViewModel {
         if favoriteStore.isReminderEnabled(object.id) {
             favoriteStore.setReminder(false, for: object.id)
             reminderScheduler.removeReminder(objectID: object.id)
+            scheduledReminderIDs.remove(object.id)
             return
         }
 
@@ -285,6 +285,7 @@ public final class SkyViewModel {
         guard enabled else {
             favoriteStore.remindersEnabled = false
             reminderScheduler.removeAllReminders()
+            scheduledReminderIDs.removeAll()
             return
         }
         if reminderScheduler.authorizationStatus == .notDetermined {
@@ -307,15 +308,12 @@ public final class SkyViewModel {
 
     public var selectedPosition: SkyPosition? {
         guard let selectedObjectID else { return nil }
-        return snapshot.positions.first { $0.id == selectedObjectID }
+        return position(for: selectedObjectID)
     }
 
     public var formattedMoment: String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_Hans_CN")
-        formatter.timeZone = observer.timeZone
-        formatter.dateFormat = "M月d日 EEEE HH:mm"
-        return formatter.string(from: moment.date)
+        momentFormatter.timeZone = observer.timeZone
+        return momentFormatter.string(from: moment.date)
     }
 
     public var observerSubtitle: String {
@@ -328,10 +326,76 @@ public final class SkyViewModel {
 
     public var dateRange: ClosedRange<Date> {
         var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-        let lower = calendar.date(from: DateComponents(year: 1900, month: 1, day: 1))!
-        let upper = calendar.date(from: DateComponents(year: 2100, month: 12, day: 31, hour: 23, minute: 59))!
-        return lower...upper
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+        let lower = calendar.date(from: DateComponents(year: 1900, month: 1, day: 1))
+            ?? Date(timeIntervalSince1970: -2_208_988_800)
+        let upper = calendar.date(from: DateComponents(year: 2100, month: 12, day: 31, hour: 23, minute: 59))
+            ?? Date()
+        return min(lower, upper)...max(lower, upper)
+    }
+
+    /// Loads the bundled catalog, derived scene data, and first snapshot away
+    /// from the main actor. The method is idempotent and safe to call from the
+    /// app's root task or from tests.
+    public func prepare() async {
+        if repository != nil { return }
+        if let preparationTask {
+            await preparationTask.value
+            return
+        }
+
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.loadCatalog()
+        }
+        preparationTask = task
+        await task.value
+    }
+
+    private func loadCatalog() async {
+        defer { preparationTask = nil }
+        guard repository == nil else {
+            return
+        }
+
+        let moment = self.moment
+        let observer = self.observer
+        let astronomy = self.astronomy
+        do {
+            let prepared = try await Task.detached(priority: .userInitiated) {
+                let repository = try CatalogRepository()
+                let sceneCatalog = SkySceneCatalog(
+                    objects: repository.allObjects,
+                    constellations: repository.constellations
+                )
+                let snapshot = SkySnapshotBuilder.makeSnapshot(
+                    objects: repository.allObjects,
+                    constellations: repository.constellations,
+                    moment: moment,
+                    observer: observer,
+                    astronomy: astronomy
+                )
+                return PreparedCatalog(
+                    repository: repository,
+                    sceneCatalog: sceneCatalog,
+                    snapshot: snapshot
+                )
+            }.value
+
+            guard !Task.isCancelled else { return }
+            repository = prepared.repository
+            sceneCatalog = prepared.sceneCatalog
+            snapshot = prepared.snapshot
+            catalogState = .ready
+            favoriteStore.removeUnknownFavorites(
+                validIDs: Set(prepared.repository.allObjects.map(\.id))
+            )
+            await loadObservationLogs()
+        } catch is CancellationError {
+            return
+        } catch {
+            catalogState = .failed(error.localizedDescription)
+        }
     }
 
     public func refreshSnapshot(updateObservationPlan: Bool = true) {
@@ -397,15 +461,30 @@ public final class SkyViewModel {
 
     private func resumeSnapshotWaitersIfIdle() {
         guard !snapshotBuildInFlight, pendingSnapshotRefresh == nil else { return }
-        let waiters = snapshotWaiters
+        let waiters = snapshotWaiters.values
         snapshotWaiters.removeAll(keepingCapacity: true)
         waiters.forEach { $0.resume() }
     }
 
+    private func resumeSnapshotWaiter(id: UUID) {
+        snapshotWaiters.removeValue(forKey: id)?.resume()
+    }
+
     public func waitForSnapshotUpdate() async {
         guard snapshotBuildInFlight || pendingSnapshotRefresh != nil else { return }
-        await withCheckedContinuation { continuation in
-            snapshotWaiters.append(continuation)
+        let id = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if Task.isCancelled {
+                    continuation.resume()
+                } else {
+                    snapshotWaiters[id] = continuation
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.resumeSnapshotWaiter(id: id)
+            }
         }
     }
 
@@ -455,17 +534,13 @@ public final class SkyViewModel {
         setDate(Date())
     }
 
-    public func togglePlayback() {
-        isPlaying ? stopPlayback() : startPlayback()
-    }
-
     public func search() {
         searchResults = repository?.search(searchQuery, limit: 30) ?? []
     }
 
     public func select(_ object: CelestialObject, focus: Bool = true) {
         selectedObjectID = object.id
-        if focus, let position = snapshot.positions.first(where: { $0.object.id == object.id }) {
+        if focus, let position = position(for: object.id) {
             cameraAzimuth = position.azimuth
             cameraAltitude = max(-20, min(80, position.altitude))
         }
@@ -476,7 +551,7 @@ public final class SkyViewModel {
     }
 
     public func center(on objectID: String) {
-        guard let position = snapshot.positions.first(where: { $0.id == objectID }) else { return }
+        guard let position = position(for: objectID) else { return }
         cameraAzimuth = position.azimuth
         cameraAltitude = max(-20, min(80, position.altitude))
         selectedObjectID = objectID
@@ -510,28 +585,73 @@ public final class SkyViewModel {
     }
 
     public func setApplicationActive(_ active: Bool) {
-        guard applicationIsActive != active else { return }
+        guard applicationIsActive != active else {
+            if active {
+                resetToNow()
+            }
+            return
+        }
         applicationIsActive = active
 
         if active {
+            resetToNow()
             if motionEnabled, !motionService.isActive {
                 motionService.start()
             }
-            if resumePlaybackAfterForeground, !isPlaying {
-                startPlayback()
-            }
-            resumePlaybackAfterForeground = false
+            restoreDeferredRefreshes()
         } else {
-            resumePlaybackAfterForeground = isPlaying
-            if isPlaying {
-                playbackTask?.cancel()
-                playbackTask = nil
-                isPlaying = false
-            }
             if motionService.isActive {
                 motionService.stop()
             }
             motionReading = nil
+            cancelDeferredRefreshes()
+        }
+    }
+
+    public func refreshAuthorizationStates() async {
+        locationAuthorization = locationService.authorizationStatus
+        locationErrorMessage = locationService.errorMessage
+
+        await reminderScheduler.refreshAuthorizationStatus()
+        reminderAuthorization = reminderScheduler.authorizationStatus
+        guard favoriteStore.remindersEnabled else { return }
+
+        switch reminderScheduler.authorizationStatus {
+        case .authorized, .provisional, .notDetermined:
+            return
+        case .denied:
+            favoriteStore.remindersEnabled = false
+            reminderScheduler.removeAllReminders()
+            scheduledReminderIDs.removeAll()
+            showToast("通知权限已关闭，观测提醒已停用，收藏仍会保留。")
+        }
+    }
+
+    private func cancelDeferredRefreshes() {
+        planTask?.cancel()
+        planTask = nil
+        eventTask?.cancel()
+        eventTask = nil
+
+        if observationPlanState == .loading {
+            observationPlanRefreshDeferred = true
+            observationPlanState = observationPlan == nil ? .idle : .ready
+        }
+        if astronomyEventState == .loading {
+            astronomyEventRefreshDeferred = true
+            astronomyEventState = astronomyEvents.isEmpty ? .idle : .ready
+        }
+    }
+
+    private func restoreDeferredRefreshes() {
+        guard tonightDataRequested || favoriteStore.remindersEnabled else { return }
+        if observationPlanRefreshDeferred || (observationPlan == nil && observationPlanState == .idle) {
+            observationPlanRefreshDeferred = false
+            scheduleObservationPlanRefresh()
+        }
+        if astronomyEventRefreshDeferred || astronomyEventState == .idle {
+            astronomyEventRefreshDeferred = false
+            scheduleAstronomyEventRefresh()
         }
     }
 
@@ -648,20 +768,39 @@ public final class SkyViewModel {
     }
 
     private func refreshScheduledReminders(for plan: ObservationPlan) async {
-        reminderScheduler.removeAllReminders()
-        guard favoriteStore.remindersEnabled else { return }
+        guard favoriteStore.remindersEnabled else {
+            reminderScheduler.removeAllReminders()
+            scheduledReminderIDs.removeAll()
+            return
+        }
+
         let enabledIDs = favoriteStore.reminderIDs
-        for visibility in plan.favoriteVisibilities where enabledIDs.contains(visibility.object.id) {
+        let desired = plan.favoriteVisibilities
+            .filter { enabledIDs.contains($0.object.id) }
+            .sorted { $0.bestTime < $1.bestTime }
+        var nextScheduledIDs = Set<String>()
+
+        for visibility in desired {
+            let objectID = visibility.object.id
             do {
                 try await reminderScheduler.scheduleReminder(
                     object: visibility.object,
                     at: visibility.bestTime,
                     observer: plan.observer
                 )
+                nextScheduledIDs.insert(objectID)
             } catch {
+                if scheduledReminderIDs.contains(objectID) {
+                    nextScheduledIDs.insert(objectID)
+                }
                 showToast(error.localizedDescription)
             }
         }
+
+        for objectID in scheduledReminderIDs.subtracting(nextScheduledIDs) {
+            reminderScheduler.removeReminder(objectID: objectID)
+        }
+        scheduledReminderIDs = nextScheduledIDs
     }
 
     private func bindServices() {
@@ -683,31 +822,8 @@ public final class SkyViewModel {
         }
     }
 
-    private func startPlayback() {
-        playbackTask?.cancel()
-        isPlaying = true
-        playbackTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(250))
-                guard !Task.isCancelled, let self, self.isPlaying else { return }
-                self.advancePlayback(byElapsedSeconds: 0.25)
-            }
-        }
-    }
-
-    func advancePlayback(byElapsedSeconds elapsedSeconds: TimeInterval) {
-        moment = SkyMoment(date: moment.date.addingTimeInterval(playbackDaysPerSecond * elapsedSeconds * 86_400))
-        if moment.date > dateRange.upperBound {
-            moment = SkyMoment(date: dateRange.lowerBound)
-        }
-        scheduleSnapshotRefresh(updateObservationPlan: false)
-    }
-
-    private func stopPlayback() {
-        playbackTask?.cancel()
-        playbackTask = nil
-        isPlaying = false
-        refreshPlanIfTonightDataRequested()
+    private func position(for objectID: String) -> SkyPosition? {
+        snapshot.positions.first { $0.id == objectID }
     }
 
     private static func loadObserver() -> ObserverContext? {

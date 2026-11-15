@@ -46,7 +46,7 @@ final class StarGeometryTests: XCTestCase {
     }
 
     func testGlowTextureIsTransparentAtCorners() throws {
-        let texture = StarGeometryFactory.makeGlowTexture(size: 64)
+        let texture = try XCTUnwrap(StarGeometryFactory.makeGlowTexture(size: 64))
         let providerData = try XCTUnwrap(texture.dataProvider?.data)
         let data = providerData as Data
         let bytesPerRow = texture.bytesPerRow
@@ -64,36 +64,48 @@ final class StarGeometryTests: XCTestCase {
 
 #if os(macOS)
     func testOffscreenRenderHasBrightCenterAndDarkCorners() throws {
-        let scene = SCNScene()
-        scene.background.contents = CGColor(red: 1, green: 0, blue: 0, alpha: 1)
         let position = SkyPosition(object: object, azimuth: 0, altitude: 0)
-        let geometry = StarGeometryFactory.makeStars([position], scale: 12)
-        scene.rootNode.addChildNode(SCNNode(geometry: geometry))
+        for fieldOfView in [20.0, 70.0, 110.0] {
+            for starScale in [0.6, 1.0, 1.6] {
+                let fieldOfViewRadians = fieldOfView * .pi / 360
+                let referenceRadians = 70.0 * .pi / 360
+                let renderScale = 12 * tan(fieldOfViewRadians) / tan(referenceRadians) * starScale
+                let scene = SCNScene()
+                scene.background.contents = CGColor(red: 1, green: 0, blue: 0, alpha: 1)
+                let geometry = StarGeometryFactory.makeStars([position], scale: renderScale)
+                scene.rootNode.addChildNode(SCNNode(geometry: geometry))
 
-        let camera = SCNCamera()
-        camera.fieldOfView = 70
-        camera.zNear = 0.1
-        camera.zFar = 500
-        let cameraNode = SCNNode()
-        cameraNode.camera = camera
-        scene.rootNode.addChildNode(cameraNode)
+                let camera = SCNCamera()
+                camera.fieldOfView = fieldOfView
+                camera.zNear = 0.1
+                camera.zFar = 500
+                let cameraNode = SCNNode()
+                cameraNode.camera = camera
+                scene.rootNode.addChildNode(cameraNode)
 
-        let renderer = SCNRenderer(device: MTLCreateSystemDefaultDevice(), options: nil)
-        renderer.scene = scene
-        renderer.pointOfView = cameraNode
-        let image = renderer.snapshot(
-            atTime: 0,
-            with: CGSize(width: 256, height: 256),
-            antialiasingMode: .multisampling2X
-        )
-        let representation = try XCTUnwrap(NSBitmapImageRep(data: image.tiffRepresentation!))
+                let renderer = SCNRenderer(device: MTLCreateSystemDefaultDevice(), options: nil)
+                renderer.scene = scene
+                renderer.pointOfView = cameraNode
+                let image = renderer.snapshot(
+                    atTime: 0,
+                    with: CGSize(width: 256, height: 256),
+                    antialiasingMode: .multisampling2X
+                )
+                let representation = try XCTUnwrap(NSBitmapImageRep(data: image.tiffRepresentation!))
 
-        let center = try XCTUnwrap(representation.colorAt(x: 128, y: 128))
-        let squareCorner = try XCTUnwrap(representation.colorAt(x: 141, y: 141))
-        XCTAssertGreaterThan(center.brightnessComponent, 0.75)
-        XCTAssertGreaterThan(squareCorner.redComponent, 0.75)
-        XCTAssertLessThan(squareCorner.greenComponent, 0.15)
-        XCTAssertLessThan(squareCorner.blueComponent, 0.15)
+                let center = try XCTUnwrap(representation.colorAt(x: 128, y: 128))
+                let halfWorld = StarGeometryFactory.starSize(for: object.magnitude) * renderScale * 0.5
+                let projectedHalf = 128 * halfWorld / StarGeometryFactory.skyRadius / tan(fieldOfViewRadians)
+                let cornerOffset = min(120, max(4, Int(ceil(projectedHalf * 1.08))))
+                let squareCorner = try XCTUnwrap(
+                    representation.colorAt(x: 128 + cornerOffset, y: 128 + cornerOffset)
+                )
+                XCTAssertGreaterThan(center.brightnessComponent, 0.75)
+                XCTAssertGreaterThan(squareCorner.redComponent, 0.75)
+                XCTAssertLessThan(squareCorner.greenComponent, 0.15)
+                XCTAssertLessThan(squareCorner.blueComponent, 0.15)
+            }
+        }
     }
 #endif
 }

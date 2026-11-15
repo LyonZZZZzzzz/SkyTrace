@@ -82,6 +82,51 @@ final class SkyLabelOverlayTests: XCTestCase {
         XCTAssertTrue(scene.displayedObjectIDs.contains("star"))
     }
 
+    func testLongLabelIsClampedInsideViewport() {
+        let scene = SkyLabelOverlayScene(size: CGSize(width: 320, height: 240))
+        let labels = [
+            visual(
+                id: "edge",
+                text: "这是一个非常靠左且很长很长的恒星名称",
+                point: CGPoint(x: 1, y: 120),
+                kind: .star
+            )
+        ]
+
+        scene.apply(visuals: labels, cardinals: [])
+
+        let frame = try? XCTUnwrap(scene.debugObjectFrame(for: "edge"))
+        XCTAssertGreaterThanOrEqual(frame?.minX ?? -1, 0)
+        XCTAssertLessThanOrEqual(frame?.maxX ?? .infinity, scene.size.width)
+    }
+
+    func testAlwaysVisibleTrimKeepsOnscreenTextAndClearsOffscreenText() {
+        let scene = SkyLabelOverlayScene(size: CGSize(width: 800, height: 600))
+        scene.configure(visibilityMode: .alwaysVisible)
+        let seeds = (0..<20).map {
+            SkyObjectLabelSeed(id: "object-\($0)", text: "名称\($0)", kind: .star)
+        }
+        scene.prepareObjectLabels(seeds)
+        let allVisuals = seeds.map {
+            visual(
+                id: $0.id,
+                text: $0.text,
+                point: CGPoint(x: 100, y: 100),
+                kind: .star
+            )
+        }
+        for _ in 0..<4 {
+            scene.apply(visuals: allVisuals, cardinals: [])
+        }
+        XCTAssertTrue(scene.debugObjectHasText("object-19"))
+
+        scene.apply(visuals: [allVisuals[0]], cardinals: [])
+        scene.trimIdleResources()
+
+        XCTAssertTrue(scene.debugObjectHasText("object-0"))
+        XCTAssertFalse(scene.debugObjectHasText("object-19"))
+    }
+
     func testHiddenLabelReturnsWhenSpaceOpens() {
         let scene = SkyLabelOverlayScene(size: CGSize(width: 800, height: 600))
         let constellation = visual(
@@ -243,6 +288,61 @@ final class SkyLabelOverlayTests: XCTestCase {
         XCTAssertTrue(scene.hasPendingTextUpdates)
 
         scene.apply(visuals: visuals, cardinals: [])
+        XCTAssertFalse(scene.hasPendingTextUpdates)
+    }
+
+    func testAlwaysVisibleModeKeepsOverlappingLabelsAndCardinals() {
+        let scene = SkyLabelOverlayScene(size: CGSize(width: 800, height: 600))
+        scene.configure(visibilityMode: .alwaysVisible)
+        let point = CGPoint(x: 300, y: 240)
+        let visuals = [
+            visual(id: "selected", text: "选中目标", point: point, kind: .star, selected: true),
+            visual(id: "other", text: "其他星体", point: point, kind: .star),
+            visual(id: "constellation", text: "测试座", point: point, kind: .constellation)
+        ]
+        scene.prepareObjectLabels(
+            visuals.map { SkyObjectLabelSeed(id: $0.id, text: $0.text, kind: $0.kind) }
+        )
+
+        scene.apply(
+            visuals: visuals,
+            cardinals: [visual(id: "cardinal-北", text: "北", point: point, kind: .constellation)]
+        )
+
+        XCTAssertEqual(scene.displayedObjectIDs, Set(["selected", "other", "constellation"]))
+        XCTAssertEqual(scene.displayedCardinalIDs, Set(["cardinal-北"]))
+        XCTAssertFalse(scene.hasPendingTextUpdates)
+    }
+
+    func testAlwaysVisibleModeKeepsFixedNodeCountAcrossCameraChurn() {
+        let scene = SkyLabelOverlayScene(size: CGSize(width: 800, height: 600))
+        scene.configure(visibilityMode: .alwaysVisible)
+        let seeds = (0..<200).map {
+            SkyObjectLabelSeed(id: "object-\($0)", text: "名称\($0)", kind: .star)
+        }
+        scene.prepareObjectLabels(seeds)
+
+        for _ in 0..<25 {
+            scene.apply(visuals: [], cardinals: [])
+        }
+        XCTAssertEqual(scene.debugObjectNodeCount, 200)
+        XCTAssertFalse(scene.hasPendingTextUpdates)
+
+        for iteration in 0..<1_000 {
+            let offset = iteration % seeds.count
+            let visuals = (0..<40).map { index in
+                let seed = seeds[(index + offset) % seeds.count]
+                return visual(
+                    id: seed.id,
+                    text: seed.text,
+                    point: CGPoint(x: index * 15, y: 300),
+                    kind: seed.kind
+                )
+            }
+            scene.apply(visuals: visuals, cardinals: [])
+        }
+
+        XCTAssertEqual(scene.debugObjectNodeCount, 200)
         XCTAssertFalse(scene.hasPendingTextUpdates)
     }
 

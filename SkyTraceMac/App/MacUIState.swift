@@ -1,4 +1,5 @@
 import Observation
+import SkyTraceCore
 import SkyTraceUI
 import SwiftUI
 
@@ -9,6 +10,8 @@ final class MacUIState {
     var showSearch = false
     var showLocation = false
     var showTonight = false
+    var isLabelPreparationComplete = false
+    var renderDiagnostics = SkyRenderDiagnostics.empty
 
     var showConstellations: Bool {
         didSet { UserDefaults.standard.set(showConstellations, forKey: Keys.showConstellations) }

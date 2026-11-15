@@ -51,8 +51,9 @@ public final class UserNotificationScheduler: ObservationReminderScheduling {
         content.userInfo = ["objectID": object.id]
 
         let identifier = Self.identifier(for: object.id)
-        center.removePendingNotificationRequests(withIdentifiers: [identifier])
         do {
+            // Adding a request with an existing identifier atomically replaces it.
+            // Keep the old request alive if the new scheduling attempt fails.
             try await center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: trigger))
             SkyTraceDiagnostics.notifications.info("Scheduled observation reminder")
         } catch {

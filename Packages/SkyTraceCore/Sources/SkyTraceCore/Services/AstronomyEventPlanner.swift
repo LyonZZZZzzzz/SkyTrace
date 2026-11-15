@@ -21,14 +21,18 @@ public actor AstronomyEventPlanner: AstronomyEventPlanning {
         observer: ObserverContext,
         objects: [CelestialObject]
     ) async -> [AstronomyEvent] {
-        guard startDate < endDate else { return [] }
+        guard startDate < endDate, !Task.isCancelled else { return [] }
         let key = EventCacheKey(startDate: startDate, endDate: endDate, observer: observer)
         if let cached = cache[key] { return cached }
         var events: [AstronomyEvent] = []
         events.append(contentsOf: moonQuarterEvents(from: startDate, through: endDate))
+        guard !Task.isCancelled else { return [] }
         events.append(contentsOf: seasonEvents(from: startDate, through: endDate, observer: observer))
+        guard !Task.isCancelled else { return [] }
         events.append(contentsOf: eclipseEvents(from: startDate, through: endDate, observer: observer))
+        guard !Task.isCancelled else { return [] }
         events.append(contentsOf: conjunctionEvents(from: startDate, through: endDate, observer: observer, objects: objects))
+        guard !Task.isCancelled else { return [] }
         let unique = Dictionary(events.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let sorted = unique.values.sorted { $0.date < $1.date }
         cache[key] = sorted
@@ -45,6 +49,7 @@ public actor AstronomyEventPlanner: AstronomyEventPlanning {
         var result: [AstronomyEvent] = []
         var cursor = startDate
         while let quarter = astronomy.nextMoonQuarter(after: cursor), quarter.date <= endDate {
+            guard !Task.isCancelled else { return [] }
             let kind: AstronomyEventKind
             switch quarter.kind {
             case .newMoon: kind = .newMoon
@@ -70,6 +75,7 @@ public actor AstronomyEventPlanner: AstronomyEventPlanning {
         let startYear = Calendar(identifier: .gregorian).component(.year, from: startDate)
         let endYear = Calendar(identifier: .gregorian).component(.year, from: endDate)
         for year in startYear...endYear {
+            guard !Task.isCancelled else { return [] }
             guard let seasons = astronomy.seasons(year: year) else { continue }
             let values: [(String, Date)] = [
                 ("春分", seasons.marchEquinox),
@@ -95,6 +101,7 @@ public actor AstronomyEventPlanner: AstronomyEventPlanning {
         var result: [AstronomyEvent] = []
         var lunarCursor = startDate
         for _ in 0..<8 {
+            guard !Task.isCancelled else { return [] }
             guard let eclipse = astronomy.nextLunarEclipse(after: lunarCursor, observer: observer), eclipse.peak <= endDate else { break }
             if eclipse.altitude > 0 {
                 result.append(AstronomyEvent(
@@ -112,6 +119,7 @@ public actor AstronomyEventPlanner: AstronomyEventPlanning {
 
         var solarCursor = startDate
         for _ in 0..<8 {
+            guard !Task.isCancelled else { return [] }
             guard let eclipse = astronomy.nextLocalSolarEclipse(after: solarCursor, observer: observer), eclipse.peak <= endDate else { break }
             if eclipse.altitude > 0 {
                 result.append(AstronomyEvent(
@@ -147,6 +155,7 @@ public actor AstronomyEventPlanner: AstronomyEventPlanning {
 
         var result: [AstronomyEvent] = []
         for (first, second, kind) in pairs {
+            guard !Task.isCancelled else { return [] }
             guard let firstBody = AstronomyService.body(for: first), let secondBody = AstronomyService.body(for: second) else { continue }
             let interval: TimeInterval = 6 * 3600
             var previous = startDate.addingTimeInterval(-interval)
@@ -154,6 +163,7 @@ public actor AstronomyEventPlanner: AstronomyEventPlanning {
             var current = startDate
             var currentSeparation = angularSeparation(firstBody, secondBody, at: current, observer: observer)
             while current < endDate {
+                guard !Task.isCancelled else { return [] }
                 let next = min(current.addingTimeInterval(interval), endDate)
                 let nextSeparation = angularSeparation(firstBody, secondBody, at: next, observer: observer)
                 if currentSeparation <= previousSeparation,

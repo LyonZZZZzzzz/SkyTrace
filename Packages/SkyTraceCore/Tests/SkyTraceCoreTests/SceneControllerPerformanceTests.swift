@@ -9,7 +9,7 @@ final class SceneControllerPerformanceTests: XCTestCase {
     private let startDate = Date(timeIntervalSince1970: 1_735_689_600)
     private let astronomy = AstronomyService()
 
-    func testStaticGeometryIsBuiltOnceAcrossCameraAndSnapshotUpdates() {
+    func testStaticGeometryIsBuiltOnceAcrossCameraAndSnapshotUpdates() async {
         let catalog = makeCatalog()
         let controller = SkySceneController(catalog: catalog)
 
@@ -18,6 +18,7 @@ final class SceneControllerPerformanceTests: XCTestCase {
             showConstellations: true,
             starScale: 1
         )
+        await controller.debugWaitForStaticGeometry()
         let initialBuildCount = controller.staticGeometryRebuildCount
         XCTAssertEqual(initialBuildCount, 1)
 
@@ -44,15 +45,75 @@ final class SceneControllerPerformanceTests: XCTestCase {
             showConstellations: true,
             starScale: 1.2
         )
+        await controller.debugWaitForStaticGeometry()
         XCTAssertEqual(controller.staticGeometryRebuildCount, initialBuildCount + 1)
     }
 
-    func testFirstSnapshotIsAppliedImmediately() {
+    func testRevertingStarScaleCancelsPendingGeometryReplacement() async {
+        let controller = SkySceneController(catalog: makeCatalog())
+        let snapshot = makeSnapshot(date: startDate)
+        controller.update(snapshot: snapshot, showConstellations: true, starScale: 1)
+        await controller.debugWaitForStaticGeometry()
+
+        controller.update(snapshot: snapshot, showConstellations: true, starScale: 1.2)
+        controller.update(snapshot: snapshot, showConstellations: true, starScale: 1)
+        await controller.debugWaitForStaticGeometry()
+        XCTAssertEqual(controller.staticGeometryRebuildCount, 1)
+
+        controller.update(snapshot: snapshot, showConstellations: true, starScale: 1.2)
+        await controller.debugWaitForStaticGeometry()
+        XCTAssertEqual(controller.staticGeometryRebuildCount, 2)
+    }
+
+    func testResumingRestartsPendingSnapshotTransition() {
+        let controller = SkySceneController(catalog: makeCatalog())
+        controller.update(snapshot: makeSnapshot(date: startDate), showConstellations: true, starScale: 1)
+        controller.setApplicationActive(false, isVisible: false)
+        let nextSnapshot = makeSnapshot(date: startDate.addingTimeInterval(3_600))
+        controller.update(snapshot: nextSnapshot, showConstellations: true, starScale: 1)
+
+        controller.setApplicationActive(true, isVisible: true)
+        XCTAssertEqual(controller.debugRenderPolicy, .animating)
+        XCTAssertTrue(controller.debugRendersContinuously)
+    }
+
+    func testMotionReadingStartsContinuousRenderingFromIdle() {
+        let controller = SkySceneController()
+        let reading = SkyMotionReading(azimuth: 30, altitude: 20, roll: 0)
+        controller.debugRefreshContinuousRenderingMode()
+        XCTAssertEqual(controller.debugRenderPolicy, .idleWarm)
+
+        controller.setMotionReading(reading)
+        XCTAssertEqual(controller.debugRenderPolicy, .animating)
+        XCTAssertTrue(controller.debugRendersContinuously)
+
+        controller.setMotionReading(nil)
+        XCTAssertEqual(controller.debugRenderPolicy, .idleWarm)
+        XCTAssertFalse(controller.debugRendersContinuously)
+
+        controller.setApplicationActive(false, isVisible: false)
+        controller.setMotionReading(reading)
+        controller.setApplicationActive(true, isVisible: true)
+        XCTAssertEqual(controller.debugRenderPolicy, .idleWarm)
+        XCTAssertFalse(controller.debugRendersContinuously)
+    }
+
+    func testSelectionUpdatesWhenCameraStateHasNotChanged() {
+        let controller = SkySceneController(catalog: makeCatalog())
+        controller.update(snapshot: makeSnapshot(date: startDate), showConstellations: true, starScale: 1)
+        let camera = controller.currentCameraState
+        let sourceRevision = controller.debugLabelSourceRevision
+        controller.synchronizeCamera(camera, selectedObjectID: "star-1")
+        XCTAssertEqual(controller.debugLabelSourceRevision, sourceRevision + 1)
+    }
+
+    func testFirstSnapshotIsAppliedImmediately() async {
         let catalog = makeCatalog()
         let controller = SkySceneController(catalog: catalog)
         let snapshot = makeSnapshot(date: startDate)
 
         controller.update(snapshot: snapshot, showConstellations: true, starScale: 1)
+        await controller.debugWaitForStaticGeometry()
 
         let expected = astronomy.horizontalTransform(
             for: snapshot.moment,
@@ -62,13 +123,14 @@ final class SceneControllerPerformanceTests: XCTestCase {
         XCTAssertEqual(controller.debugTransitionDuration, 0, accuracy: 0.000_1)
     }
 
-    func testSnapshotTransitionIsContinuousAndEndsAtTarget() {
+    func testSnapshotTransitionIsContinuousAndEndsAtTarget() async {
         let catalog = makeCatalog()
         let controller = SkySceneController(catalog: catalog)
         let first = makeSnapshot(date: startDate)
         let second = makeSnapshot(date: startDate.addingTimeInterval(12 * 3_600))
 
         controller.update(snapshot: first, showConstellations: true, starScale: 1)
+        await controller.debugWaitForStaticGeometry()
         let before = controller.debugCurrentSceneMatrix
         controller.update(snapshot: second, showConstellations: true, starScale: 1)
         let start = controller.debugTransitionStartTime
@@ -89,7 +151,28 @@ final class SceneControllerPerformanceTests: XCTestCase {
         XCTAssertNotNil(controller.debugCurrentDynamicVectors["sun"])
     }
 
-    func testLifecyclePausesAndWakesRendering() {
+    func testRemovedSolarSystemObjectClearsAtTransitionEnd() {
+        let controller = SkySceneController(catalog: makeCatalog())
+        controller.update(snapshot: makeSnapshot(date: startDate), showConstellations: true, starScale: 1)
+        XCTAssertNotNil(controller.debugCurrentDynamicVectors["sun"])
+
+        let empty = SkySnapshot(
+            observer: observer,
+            moment: SkyMoment(date: startDate.addingTimeInterval(3_600)),
+            positions: [],
+            constellationSegments: [],
+            recommendations: []
+        )
+        controller.update(snapshot: empty, showConstellations: true, starScale: 1)
+        let start = controller.debugTransitionStartTime
+        let duration = controller.debugTransitionDuration
+        controller.debugAdvanceAnimation(to: start + duration * 0.5)
+        XCTAssertNotNil(controller.debugCurrentDynamicVectors["sun"])
+        controller.debugAdvanceAnimation(to: start + duration + 0.01)
+        XCTAssertNil(controller.debugCurrentDynamicVectors["sun"])
+    }
+
+    func testLifecyclePausesAndWakesRendering() async {
         let controller = SkySceneController(catalog: makeCatalog())
         controller.debugRefreshContinuousRenderingMode()
         XCTAssertFalse(controller.debugRendersContinuously)
@@ -126,23 +209,19 @@ final class SceneControllerPerformanceTests: XCTestCase {
         controller.debugRefreshContinuousRenderingMode()
         XCTAssertFalse(controller.debugRendersContinuously)
 
-        controller.setTimePlaybackActive(true)
-        XCTAssertTrue(controller.debugRendersContinuously)
-        controller.setTimePlaybackActive(false)
-        controller.debugRefreshContinuousRenderingMode()
-        XCTAssertFalse(controller.debugRendersContinuously)
-
         controller.update(
             snapshot: makeSnapshot(date: startDate),
             showConstellations: true,
             starScale: 1
         )
+        await controller.debugWaitForStaticGeometry()
         controller.debugRefreshContinuousRenderingMode()
         controller.update(
             snapshot: makeSnapshot(date: startDate.addingTimeInterval(3_600)),
             showConstellations: true,
             starScale: 1
         )
+        await controller.debugWaitForStaticGeometry()
         XCTAssertTrue(controller.debugRendersContinuously)
     }
 
@@ -152,12 +231,13 @@ final class SceneControllerPerformanceTests: XCTestCase {
         controller.debugRefreshContinuousRenderingMode()
 
         XCTAssertEqual(controller.debugRenderPolicy, .idleWarm)
-        XCTAssertTrue(controller.debugKeepAliveScheduled)
+        XCTAssertFalse(controller.debugRendersContinuously)
+        XCTAssertFalse(controller.debugRenderingEnabled)
 
         controller.beginCameraInteraction()
         controller.debugRefreshContinuousRenderingMode()
         XCTAssertEqual(controller.debugRenderPolicy, .interactive)
-        XCTAssertFalse(controller.debugKeepAliveScheduled)
+        XCTAssertTrue(controller.debugRendersContinuously)
 
         controller.endCameraInteraction(
             horizontalVelocity: 0,
@@ -167,7 +247,68 @@ final class SceneControllerPerformanceTests: XCTestCase {
         )
         controller.setApplicationActive(false, isVisible: false)
         XCTAssertEqual(controller.debugRenderPolicy, .suspended)
-        XCTAssertFalse(controller.debugKeepAliveScheduled)
+        XCTAssertFalse(controller.debugRendersContinuously)
+    }
+
+    func testIdleWakeupsDoNotPolluteFrameMetrics() {
+        let controller = SkySceneController(catalog: makeCatalog())
+        controller.setApplicationActive(true, isVisible: true)
+        controller.debugRefreshContinuousRenderingMode()
+
+        controller.debugSimulateFrame(at: 10)
+        controller.debugSimulateFrame(at: 10.5)
+
+        XCTAssertEqual(controller.metrics.sampleWindowCount, 0)
+        XCTAssertEqual(controller.metrics.p95FrameInterval, 0, accuracy: 0.000_1)
+    }
+
+    func testInteractionProfileHidesFaintStarsAndLimitsLabelsWithoutRebuild() async {
+        let catalog = makeInteractionCatalog()
+        let controller = SkySceneController(catalog: catalog)
+        controller.sceneView.frame = CGRect(x: 0, y: 0, width: 800, height: 600)
+        controller.setApplicationActive(true, isVisible: true)
+        controller.update(
+            snapshot: makeSnapshot(date: startDate),
+            showConstellations: true,
+            starScale: 1
+        )
+        await controller.debugWaitForStaticGeometry()
+        controller.updateCamera(
+            SkyCameraState(fieldOfView: 110),
+            selectedObjectID: nil
+        )
+        controller.debugRefreshLabels()
+
+        let rebuildCount = controller.staticGeometryRebuildCount
+        let brightNode = controller.debugCelestialRootNode.childNode(
+            withName: "starsNode",
+            recursively: false
+        )
+        let faintNode = controller.debugCelestialRootNode.childNode(
+            withName: "faintStarsNode",
+            recursively: false
+        )
+        XCTAssertEqual(brightNode?.geometry?.sources(for: .vertex).first?.vectorCount, 8)
+        XCTAssertEqual(faintNode?.geometry?.sources(for: .vertex).first?.vectorCount, 4)
+        XCTAssertFalse(controller.debugFaintStarsIsHidden)
+
+        controller.beginCameraInteraction()
+
+        XCTAssertTrue(controller.debugFaintStarsIsHidden)
+        XCTAssertEqual(controller.debugLabelCapacity, 50)
+        XCTAssertEqual(controller.debugInteractionRenderProfile.labelCapacityLimit, 50)
+
+        controller.endCameraInteraction(
+            horizontalVelocity: 0,
+            verticalVelocity: 0,
+            rollVelocity: 0,
+            viewportSize: CGSize(width: 800, height: 600)
+        )
+
+        XCTAssertFalse(controller.debugFaintStarsIsHidden)
+        XCTAssertGreaterThan(controller.debugLabelCapacity, 50)
+        XCTAssertEqual(controller.debugInteractionRenderProfile, .full)
+        XCTAssertEqual(controller.staticGeometryRebuildCount, rebuildCount)
     }
 
     func testPendingLabelTexturesKeepRenderingUntilWarmupCompletes() {
@@ -180,7 +321,6 @@ final class SceneControllerPerformanceTests: XCTestCase {
         XCTAssertTrue(controller.debugHasPendingLabelTextUpdates)
         XCTAssertTrue(controller.debugRendersContinuously)
         XCTAssertTrue(controller.debugRenderingEnabled)
-        XCTAssertFalse(controller.debugKeepAliveScheduled)
 
         for _ in 0..<4 {
             controller.debugRefreshLabels()
@@ -190,7 +330,6 @@ final class SceneControllerPerformanceTests: XCTestCase {
         XCTAssertFalse(controller.debugHasPendingLabelTextUpdates)
         XCTAssertFalse(controller.debugRendersContinuously)
         XCTAssertFalse(controller.debugRenderingEnabled)
-        XCTAssertTrue(controller.debugKeepAliveScheduled)
     }
 
     func testLabelProjectionCacheSkipsUnchangedFrames() {
@@ -258,6 +397,137 @@ final class SceneControllerPerformanceTests: XCTestCase {
         }
     }
 
+    func testRenderAdaptationAppliesAndRestoresQuality() {
+        let controller = SkySceneController(catalog: makeCatalog())
+
+        controller.updateRenderEnvironment(SkyRenderEnvironment())
+        XCTAssertEqual(controller.debugRenderAdaptationProfile, .normal)
+        XCTAssertEqual(controller.sceneView.preferredFramesPerSecond, 60)
+
+        controller.updateRenderEnvironment(SkyRenderEnvironment(thermalState: .serious))
+        XCTAssertEqual(controller.debugRenderAdaptationProfile, .elevated)
+        XCTAssertEqual(controller.sceneView.preferredFramesPerSecond, 30)
+        XCTAssertEqual(controller.debugLabelCapacity, 80)
+        XCTAssertFalse(controller.debugFaintStarsIsHidden)
+
+        controller.updateRenderEnvironment(SkyRenderEnvironment(thermalState: .critical))
+        XCTAssertEqual(controller.debugRenderAdaptationProfile, .critical)
+        XCTAssertEqual(controller.debugLabelCapacity, 50)
+        XCTAssertTrue(controller.debugFaintStarsIsHidden)
+        XCTAssertEqual(controller.sceneView.antialiasingMode, .none)
+
+        controller.updateRenderEnvironment(SkyRenderEnvironment())
+        XCTAssertEqual(controller.debugRenderAdaptationProfile, .normal)
+        XCTAssertEqual(controller.sceneView.antialiasingMode, .multisampling2X)
+        XCTAssertFalse(controller.debugFaintStarsIsHidden)
+
+        controller.updateRenderEnvironment(
+            SkyRenderEnvironment(memoryPressure: .warning, revision: 1)
+        )
+        XCTAssertEqual(controller.debugRenderAdaptationProfile, .critical)
+        controller.shutdown()
+    }
+
+    func testShutdownReleasesRenderingDelegateAndOverlay() {
+        let controller = SkySceneController(catalog: makeCatalog())
+        controller.setApplicationActive(true, isVisible: true)
+        controller.onCameraChange = { _ in }
+        controller.onCameraSettled = { _ in }
+
+        controller.shutdown()
+
+        XCTAssertFalse(controller.debugRenderingEnabled)
+        XCTAssertNil(controller.sceneView.delegate)
+        XCTAssertNil(controller.sceneView.overlaySKScene)
+        XCTAssertFalse(controller.sceneView.rendersContinuously)
+        XCTAssertFalse(controller.sceneView.isPlaying)
+    }
+
+    func testAlwaysVisibleLabelsIgnoreFieldOfViewInteractionAndPressureProfiles() {
+        let catalog = makeDenseLabelCatalog(count: 150)
+        let controller = SkySceneController(
+            catalog: catalog,
+            labelVisibilityMode: .alwaysVisible
+        )
+        controller.sceneView.frame = CGRect(x: 0, y: 0, width: 1_600, height: 1_000)
+        controller.setApplicationActive(true, isVisible: true)
+        controller.updateCamera(
+            SkyCameraState(fieldOfView: 110),
+            selectedObjectID: nil
+        )
+        controller.updateLabels(magnitudeLimit: 10, showCardinals: false)
+        for _ in 0..<24 {
+            controller.debugRefreshLabels()
+        }
+
+        let expectedCount = controller.debugLabelSourceObjectIDs.count
+        XCTAssertEqual(expectedCount, 150)
+        XCTAssertEqual(controller.debugLabelCapacity, expectedCount)
+        XCTAssertEqual(controller.debugLabelNodeCount, expectedCount)
+        XCTAssertFalse(controller.debugDisplayedObjectIDs.isEmpty)
+
+        controller.beginCameraInteraction()
+        controller.updateRenderEnvironment(
+            SkyRenderEnvironment(
+                thermalState: .critical,
+                isLowPowerModeEnabled: true,
+                memoryPressure: .warning,
+                revision: 1
+            )
+        )
+        for _ in 0..<2 {
+            controller.debugRefreshLabels()
+        }
+
+        XCTAssertEqual(controller.debugLabelCapacity, expectedCount)
+        XCTAssertEqual(controller.debugLabelNodeCount, expectedCount)
+        XCTAssertEqual(controller.debugLabelSourceObjectIDs.count, expectedCount)
+        XCTAssertFalse(controller.debugDisplayedObjectIDs.isEmpty)
+        controller.shutdown()
+    }
+
+    func testAlwaysVisibleLabelPoolIsBoundedAcrossSnapshotUpdates() async {
+        let catalog = makeDenseLabelCatalog(count: 200)
+        let controller = SkySceneController(
+            catalog: catalog,
+            labelVisibilityMode: .alwaysVisible
+        )
+        controller.sceneView.frame = CGRect(x: 0, y: 0, width: 1_600, height: 1_000)
+        controller.setApplicationActive(true, isVisible: true)
+        controller.updateLabels(magnitudeLimit: 10, showCardinals: true)
+        controller.update(
+            snapshot: makeSnapshot(date: startDate),
+            showConstellations: true,
+            starScale: 1
+        )
+        await controller.debugWaitForStaticGeometry()
+        for _ in 0..<30 {
+            controller.debugRefreshLabels()
+        }
+
+        let nodeCount = controller.debugLabelNodeCount
+        let rebuildCount = controller.staticGeometryRebuildCount
+        let snapshots = (0..<40).map { index in
+            makeSnapshot(date: startDate.addingTimeInterval(Double(index) * 60))
+        }
+
+        for index in 0..<400 {
+            controller.update(
+                snapshot: snapshots[index % snapshots.count],
+                showConstellations: true,
+                starScale: 1
+            )
+            if index.isMultiple(of: 20) {
+                controller.debugRefreshLabels()
+            }
+        }
+
+        XCTAssertEqual(controller.debugLabelNodeCount, nodeCount)
+        XCTAssertEqual(controller.staticGeometryRebuildCount, rebuildCount)
+        XCTAssertFalse(controller.debugDisplayedObjectIDs.isEmpty)
+        controller.shutdown()
+    }
+
     private func makeCatalog() -> SkySceneCatalog {
         let star = makeObject(id: "star-1", kind: .star, ra: 35, dec: 12, magnitude: 1.2)
         let deepSky = makeObject(id: "deepsky-1", kind: .deepSky, ra: 210, dec: -25, magnitude: 4.4)
@@ -272,6 +542,26 @@ final class SceneControllerPerformanceTests: XCTestCase {
             objects: [star, deepSky, sun],
             constellations: [constellation]
         )
+    }
+
+    private func makeDenseLabelCatalog(count: Int) -> SkySceneCatalog {
+        let stars = (0..<count).map { index in
+            makeObject(
+                id: "star-\(index)",
+                kind: .star,
+                ra: Double(index % 360),
+                dec: Double((index * 37) % 121) - 60,
+                magnitude: Double(index % 9) * 0.5 + 1
+            )
+        }
+        return SkySceneCatalog(objects: stars, constellations: [])
+    }
+
+    private func makeInteractionCatalog() -> SkySceneCatalog {
+        let brightStar = makeObject(id: "bright-star", kind: .star, ra: 35, dec: 12, magnitude: 2)
+        let faintStar = makeObject(id: "faint-star", kind: .star, ra: 36, dec: 12, magnitude: 6)
+        let deepSky = makeObject(id: "deepsky-1", kind: .deepSky, ra: 210, dec: -25, magnitude: 4.4)
+        return SkySceneCatalog(objects: [brightStar, faintStar, deepSky], constellations: [])
     }
 
     private func makeLabelPriorityCatalog() -> SkySceneCatalog {

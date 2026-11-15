@@ -23,8 +23,6 @@ struct SkyTraceMacCommands: Commands {
         CommandMenu("时间") {
             Button("现在") { viewModel.resetToNow() }
                 .keyboardShortcut("0", modifiers: .command)
-            Button(viewModel.isPlaying ? "暂停" : "播放") { viewModel.togglePlayback() }
-                .keyboardShortcut(.space, modifiers: [])
             Divider()
             Button("后退一天") { viewModel.shiftTime(by: -86_400) }
                 .keyboardShortcut(.leftArrow, modifiers: [.command])

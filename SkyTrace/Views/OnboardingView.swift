@@ -17,9 +17,9 @@ struct OnboardingView: View {
             message: "允许定位以计算地平线方向，也可以随时手动选择城市。"
         ),
         OnboardingPage(
-            symbol: "clock.arrow.circlepath",
-            title: "让时间向前或倒流",
-            message: "查看任意日期和时刻的天体位置，发现今晚最适合观察的目标。"
+            symbol: "clock",
+            title: "从此刻望向星空",
+            message: "默认显示当前时刻，也可以手动选择日期和时刻，查看任意一晚的天空。"
         )
     ]
 

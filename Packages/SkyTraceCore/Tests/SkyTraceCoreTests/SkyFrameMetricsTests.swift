@@ -54,6 +54,43 @@ final class SkyFrameMetricsTests: XCTestCase {
         XCTAssertEqual(metrics.geometryRebuildCount, 1)
     }
 
+    func testCumulativePercentilesRemainBoundedAcrossSpikes() {
+        var metrics = SkyFrameMetrics(sampleCapacity: 10)
+        var timestamp = 0.0
+        metrics.recordFrame(at: timestamp)
+
+        for _ in 0..<1_000 {
+            timestamp += 1.0 / 60.0
+            metrics.recordFrame(at: timestamp)
+        }
+        for _ in 0..<10 {
+            timestamp += 0.1
+            metrics.recordFrame(at: timestamp)
+        }
+
+        XCTAssertEqual(metrics.cumulativeMeasuredFrameCount, 1_010)
+        XCTAssertEqual(metrics.cumulativeP95FrameInterval, 1.0 / 60.0, accuracy: 0.001)
+        XCTAssertEqual(metrics.p95FrameInterval, 0.1, accuracy: 0.001)
+    }
+
+    func testInvalidAndOutOfOrderTimestampsDoNotCorruptSampling() {
+        var metrics = SkyFrameMetrics()
+        for timestamp in [1, .nan, .infinity, 1, 0, 1.02] {
+            metrics.recordFrame(at: timestamp)
+        }
+
+        XCTAssertEqual(metrics.measuredFrameCount, 1)
+        XCTAssertEqual(metrics.lastFrameInterval, 0.02, accuracy: 0.000_001)
+    }
+
+    func testExtremeFiniteIntervalSaturatesHistogram() {
+        var metrics = SkyFrameMetrics()
+        metrics.recordFrame(at: 0)
+        metrics.recordFrame(at: .greatestFiniteMagnitude)
+        XCTAssertEqual(metrics.mainThreadStallCount, 1)
+        XCTAssertEqual(metrics.cumulativeP99FrameInterval, 2.04775, accuracy: 0.000_001)
+    }
+
     func testSampleCapacityKeepsMemoryBounded() {
         var metrics = SkyFrameMetrics(sampleCapacity: 3)
         var timestamp = 0.0

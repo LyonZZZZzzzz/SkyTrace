@@ -3,6 +3,7 @@ import Foundation
 public enum CatalogLoadError: LocalizedError {
     case missingResource(String)
     case malformedResource(String)
+    case invalidRecord(String)
     case unsupportedCatalog
 
     public var errorDescription: String? {
@@ -11,6 +12,8 @@ public enum CatalogLoadError: LocalizedError {
             "缺少内置资源：\(name)"
         case .malformedResource(let name):
             "内置资源格式无效：\(name)"
+        case .invalidRecord(let detail):
+            "内置星表数据无效：\(detail)"
         case .unsupportedCatalog:
             "星表版本不受支持"
         }
@@ -39,17 +42,35 @@ public struct CatalogRepository: Sendable {
         let deepSkyData = try Self.resource(named: "DeepSky", extension: "json", bundle: bundle)
         let citiesData = try Self.resource(named: "Cities", extension: "json", bundle: bundle)
 
+        let decodedStars: [StarRecord]
+        let decodedLabels: [StarLabel]
+        let decodedConstellations: [ConstellationRecord]
+        let decodedDeepSky: [DeepSkyRecord]
+        let decodedCities: [City]
         do {
             let decoder = JSONDecoder()
-            stars = try Self.decodeStars(starsData)
-            let labels = try decoder.decode([StarLabel].self, from: labelsData)
-            starLabels = Dictionary(uniqueKeysWithValues: labels.map { ($0.hr, $0) })
-            constellations = try decoder.decode([ConstellationRecord].self, from: constellationsData)
-            deepSkyObjects = try decoder.decode([DeepSkyRecord].self, from: deepSkyData)
-            cities = try decoder.decode([City].self, from: citiesData)
+            decodedStars = try Self.decodeStars(starsData)
+            decodedLabels = try decoder.decode([StarLabel].self, from: labelsData)
+            decodedConstellations = try decoder.decode([ConstellationRecord].self, from: constellationsData)
+            decodedDeepSky = try decoder.decode([DeepSkyRecord].self, from: deepSkyData)
+            decodedCities = try decoder.decode([City].self, from: citiesData)
         } catch {
             throw CatalogLoadError.malformedResource("离线星表")
         }
+
+        try Self.validate(
+            stars: decodedStars,
+            labels: decodedLabels,
+            constellations: decodedConstellations,
+            deepSkyObjects: decodedDeepSky,
+            cities: decodedCities
+        )
+
+        stars = decodedStars
+        starLabels = Dictionary(uniqueKeysWithValues: decodedLabels.map { ($0.hr, $0) })
+        constellations = decodedConstellations
+        deepSkyObjects = decodedDeepSky
+        cities = decodedCities
 
         guard !stars.isEmpty, constellations.count == 88, deepSkyObjects.count == 110 else {
             throw CatalogLoadError.unsupportedCatalog
@@ -201,6 +222,87 @@ public struct CatalogRepository: Sendable {
                     magnitude: magnitude,
                     bvColorIndex: bv
                 )
+            }
+        }
+    }
+
+    static func validate(
+        stars: [StarRecord],
+        labels: [StarLabel],
+        constellations: [ConstellationRecord],
+        deepSkyObjects: [DeepSkyRecord],
+        cities: [City],
+        enforceExpectedCounts: Bool = true
+    ) throws {
+        guard
+            !stars.isEmpty,
+            !enforceExpectedCounts || (constellations.count == 88 && deepSkyObjects.count == 110)
+        else {
+            throw CatalogLoadError.unsupportedCatalog
+        }
+        guard Set(stars.map(\.hr)).count == stars.count else {
+            throw CatalogLoadError.invalidRecord("恒星 HR 编号重复")
+        }
+        guard Set(labels.map(\.hr)).count == labels.count else {
+            throw CatalogLoadError.invalidRecord("恒星标签 HR 编号重复")
+        }
+
+        for star in stars {
+            guard
+                star.raDegrees.isFinite,
+                star.decDegrees.isFinite,
+                star.magnitude.isFinite,
+                star.bvColorIndex.isFinite,
+                (0..<360).contains(star.raDegrees),
+                (-90...90).contains(star.decDegrees)
+            else {
+                throw CatalogLoadError.invalidRecord("恒星 HR \(star.hr) 坐标或星等非法")
+            }
+        }
+
+        guard Set(constellations.map(\.id)).count == constellations.count else {
+            throw CatalogLoadError.invalidRecord("星座 ID 重复")
+        }
+        for constellation in constellations {
+            for line in constellation.segments {
+                for point in line {
+                    guard
+                        point.count >= 2,
+                        point[0].isFinite,
+                        point[1].isFinite,
+                        (0..<360).contains(point[0]),
+                        (-90...90).contains(point[1])
+                    else {
+                        throw CatalogLoadError.invalidRecord("星座 \(constellation.id) 线段坐标非法")
+                    }
+                }
+            }
+        }
+
+        guard Set(deepSkyObjects.map(\.id)).count == deepSkyObjects.count else {
+            throw CatalogLoadError.invalidRecord("深空天体 ID 重复")
+        }
+        for object in deepSkyObjects {
+            guard
+                object.ra.isFinite,
+                object.dec.isFinite,
+                object.magnitude?.isFinite ?? true,
+                (0..<360).contains(object.ra),
+                (-90...90).contains(object.dec)
+            else {
+                throw CatalogLoadError.invalidRecord("深空天体 \(object.id) 坐标或星等非法")
+            }
+        }
+
+        for city in cities {
+            guard
+                city.latitude.isFinite,
+                city.longitude.isFinite,
+                (-90...90).contains(city.latitude),
+                (-180...180).contains(city.longitude),
+                !city.timeZone.isEmpty
+            else {
+                throw CatalogLoadError.invalidRecord("城市 \(city.name) 坐标或时区非法")
             }
         }
     }

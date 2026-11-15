@@ -1,19 +1,32 @@
 import CoreGraphics
 import SceneKit
 
+struct StarGeometryData: Sendable {
+    let vertices: [SCNVector3]
+    let textureCoordinates: [CGPoint]
+    let colors: [SCNVector4]
+    let indices: [Int32]
+
+    var isEmpty: Bool { vertices.isEmpty }
+}
+
 public enum StarGeometryFactory {
     public static let skyRadius = 100.0
+    nonisolated(unsafe) private static var cachedGlowTexture: CGImage?
+    private static let glowTextureLock = NSLock()
 
     public static func makeStars(_ positions: [SkyPosition], scale: CGFloat = 1) -> SCNGeometry {
         makeStars(
-            sources: positions.map {
-                StarSource(
-                    direction: $0.horizontalVector.normalized,
-                    magnitude: $0.object.magnitude,
-                    bvColorIndex: $0.object.bvColorIndex
-                )
-            },
-            scale: scale
+            data: makeStarGeometryData(
+                sources: positions.map {
+                    StarSource(
+                        direction: $0.horizontalVector.normalized,
+                        magnitude: $0.object.magnitude,
+                        bvColorIndex: $0.object.bvColorIndex
+                    )
+                },
+                scale: scale
+            )
         )
     }
 
@@ -21,7 +34,16 @@ public enum StarGeometryFactory {
     /// geometry is expected to live below `celestialRootNode` and rotate as one
     /// unit when the observer time or location changes.
     public static func makeStars(_ objects: [CelestialObject], scale: CGFloat = 1) -> SCNGeometry {
-        makeStars(
+        makeStars(data: makeStarGeometryData(objects: objects, scale: scale))
+    }
+
+    /// CPU-only geometry generation that is safe to run away from SceneKit's
+    /// main-thread object graph. The resulting buffers are attached on main.
+    static func makeStarGeometryData(
+        objects: [CelestialObject],
+        scale: CGFloat
+    ) -> StarGeometryData {
+        makeStarGeometryData(
             sources: objects.map { object in
                 StarSource(
                     direction: SkySceneCatalog.direction(
@@ -102,7 +124,11 @@ public enum StarGeometryFactory {
         let plane = SCNPlane(width: size, height: size)
         let material = SCNMaterial()
         material.lightingModel = .constant
-        material.diffuse.contents = makeGlowTexture()
+        if let texture = sharedGlowTexture() {
+            material.diffuse.contents = texture
+        } else {
+            material.transparency = 0
+        }
         material.diffuse.wrapS = .clamp
         material.diffuse.wrapT = .clamp
         material.isDoubleSided = true
@@ -134,10 +160,11 @@ public enum StarGeometryFactory {
         return min(1.3, max(0.16, (6.8 - magnitude) * 0.18))
     }
 
-    static func makeGlowTexture(size: Int = 64) -> CGImage {
+    static func makeGlowTexture(size: Int = 64) -> CGImage? {
+        guard size > 0 else { return nil }
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         let bytesPerRow = size * 4
-        let context = CGContext(
+        guard let context = CGContext(
             data: nil,
             width: size,
             height: size,
@@ -145,7 +172,7 @@ public enum StarGeometryFactory {
             bytesPerRow: bytesPerRow,
             space: colorSpace,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        )!
+        ) else { return nil }
         context.clear(CGRect(x: 0, y: 0, width: size, height: size))
 
         let colors = [
@@ -154,11 +181,11 @@ public enum StarGeometryFactory {
             CGColor(red: 0.92, green: 0.96, blue: 1, alpha: 0.28),
             CGColor(red: 0.85, green: 0.92, blue: 1, alpha: 0)
         ] as CFArray
-        let gradient = CGGradient(
+        guard let gradient = CGGradient(
             colorsSpace: colorSpace,
             colors: colors,
             locations: [0, 0.18, 0.52, 1]
-        )!
+        ) else { return nil }
         let center = CGPoint(x: Double(size) / 2, y: Double(size) / 2)
         context.drawRadialGradient(
             gradient,
@@ -168,7 +195,7 @@ public enum StarGeometryFactory {
             endRadius: Double(size) / 2,
             options: []
         )
-        return context.makeImage()!
+        return context.makeImage()
     }
 
     private struct StarSource {
@@ -177,7 +204,10 @@ public enum StarGeometryFactory {
         let bvColorIndex: Double?
     }
 
-    private static func makeStars(sources: [StarSource], scale: CGFloat) -> SCNGeometry {
+    private static func makeStarGeometryData(
+        sources: [StarSource],
+        scale: CGFloat
+    ) -> StarGeometryData {
         var vertices: [SCNVector3] = []
         var textureCoordinates: [CGPoint] = []
         var colors: [SCNVector4] = []
@@ -190,6 +220,7 @@ public enum StarGeometryFactory {
         indices.reserveCapacity(sources.count * 6)
 
         for (index, source) in sources.enumerated() {
+            if Task.isCancelled { break }
             let direction = source.direction.normalized
             let center = direction * skyRadius
             let basis = tangentBasis(for: direction)
@@ -228,20 +259,33 @@ public enum StarGeometryFactory {
             ])
         }
 
+        return StarGeometryData(
+            vertices: vertices,
+            textureCoordinates: textureCoordinates,
+            colors: colors,
+            indices: indices
+        )
+    }
+
+    static func makeStars(data: StarGeometryData) -> SCNGeometry {
         let geometry = SCNGeometry(
             sources: [
-                SCNGeometrySource(vertices: vertices),
-                colorSource(colors),
-                SCNGeometrySource(textureCoordinates: textureCoordinates)
+                SCNGeometrySource(vertices: data.vertices),
+                colorSource(data.colors),
+                SCNGeometrySource(textureCoordinates: data.textureCoordinates)
             ],
             elements: [
-                SCNGeometryElement(indices: indices, primitiveType: .triangles)
+                SCNGeometryElement(indices: data.indices, primitiveType: .triangles)
             ]
         )
 
         let material = SCNMaterial()
         material.lightingModel = .constant
-        material.diffuse.contents = makeGlowTexture()
+        if let texture = sharedGlowTexture() {
+            material.diffuse.contents = texture
+        } else {
+            material.transparency = 0
+        }
         material.diffuse.wrapS = .clamp
         material.diffuse.wrapT = .clamp
         material.isDoubleSided = true
@@ -289,6 +333,17 @@ public enum StarGeometryFactory {
         let right = Vector3D.cross(reference, direction).normalized
         let up = Vector3D.cross(direction, right).normalized
         return (right, up)
+    }
+
+    private static func sharedGlowTexture() -> CGImage? {
+        glowTextureLock.lock()
+        defer { glowTextureLock.unlock() }
+        if let cachedGlowTexture {
+            return cachedGlowTexture
+        }
+        guard let texture = makeGlowTexture() else { return nil }
+        cachedGlowTexture = texture
+        return texture
     }
 
     private static func bodySize(for object: CelestialObject) -> CGFloat {

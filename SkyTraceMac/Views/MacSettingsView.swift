@@ -26,6 +26,18 @@ struct MacSettingsView: View {
                         .font(.caption.monospacedDigit())
                         .frame(width: 42, alignment: .trailing)
                 }
+
+#if DEBUG
+                Section("渲染诊断") {
+                    diagnosticRow("质量", uiState.renderDiagnostics.renderQuality.rawValue)
+                    diagnosticRow("活动", uiState.renderDiagnostics.renderActivity.rawValue)
+                    diagnosticRow("P95", milliseconds(uiState.renderDiagnostics.p95FrameInterval))
+                    diagnosticRow("P99", milliseconds(uiState.renderDiagnostics.p99FrameInterval))
+                    diagnosticRow("标签", "\(uiState.renderDiagnostics.displayedLabelCount) / \(uiState.renderDiagnostics.labelSourceCount)")
+                    diagnosticRow("几何重建", "\(uiState.renderDiagnostics.geometryRebuildCount)")
+                    diagnosticRow("RSS", memoryText(uiState.renderDiagnostics.residentMemoryBytes))
+                }
+#endif
             }
             .formStyle(.grouped)
             .tabItem { Label("显示", systemImage: "sparkles") }
@@ -46,7 +58,7 @@ struct MacSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
                 Section {
-                    Text("观测位置、时间与相机状态会随主窗口自动恢复。")
+                    Text("回到前台时，星图默认显示当前时刻；观测位置与相机状态会随主窗口恢复。")
                     Text("Mac 与 iPhone 的设置彼此独立，不会上传到服务器。")
                 }
                 Section {
@@ -76,5 +88,23 @@ struct MacSettingsView: View {
             .tabItem { Label("关于", systemImage: "info.circle") }
         }
         .frame(width: 560, height: 360)
+    }
+
+    private func diagnosticRow(_ title: String, _ value: String) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(value)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func milliseconds(_ interval: Double) -> String {
+        String(format: "%.1f ms", interval * 1_000)
+    }
+
+    private func memoryText(_ bytes: UInt64) -> String {
+        String(format: "%.1f MB", Double(bytes) / 1_048_576)
     }
 }

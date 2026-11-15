@@ -20,14 +20,21 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     public private(set) var staticGeometryRebuildCount = 0
     public var onCameraChange: ((SkyCameraState) -> Void)?
     public var onCameraSettled: ((SkyCameraState) -> Void)?
+    public var onDiagnosticsChange: ((SkyRenderDiagnostics) -> Void)?
+    public var onLabelReadinessChange: ((Bool) -> Void)? {
+        didSet { onLabelReadinessChange?(isLabelPreparationComplete) }
+    }
+    public var isLabelPreparationComplete: Bool { labelPreparationComplete }
     public var isUserInteracting = false
     public var isCameraMoving: Bool { cameraMotion.isMoving }
     public var currentCameraState: SkyCameraState { cameraMotion.state }
 
     private let catalog: SkySceneCatalog?
     private let astronomy: any AstronomyCalculating
+    private let labelVisibilityMode: SkyLabelVisibilityMode
     private let celestialRootNode: SCNNode
     private let starsNode: SCNNode
+    private let faintStarsNode: SCNNode
     private let linesNode: SCNNode
     private let horizonNode: SCNNode
     private let dynamicRootNode: SCNNode
@@ -35,7 +42,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     private let labelOverlayScene: SkyLabelOverlayScene
     private var dynamicNodes: [String: SCNNode] = [:]
     private var targetSnapshot: SkySnapshot = .empty
-    private var previousSnapshot: SkySnapshot = .empty
+    private var hasAppliedSceneTarget = false
     private var currentSnapshotVectors: [String: Vector3D] = [:]
     private var previousDynamicVectors: [String: Vector3D] = [:]
     private var targetDynamicVectors: [String: Vector3D] = [:]
@@ -51,6 +58,9 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     private var starScale: CGFloat = 1
     private var hasBuiltStaticGeometry = false
     private var staticGeometryScale: CGFloat?
+    private var staticGeometryTask: Task<Void, Never>?
+    private var staticGeometryGeneration = 0
+    private var staticGeometryScaleInFlight: CGFloat?
     private var geometryKey: GeometryKey?
     private var cameraMotion = SkyCameraMotionController()
     private var wasCameraMoving = false
@@ -65,27 +75,39 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     private var cachedObjectVisuals: [SkyLabelVisual] = []
     private var cachedCardinalVisuals: [SkyLabelVisual] = []
     private var labelProjectionRecomputeCount = 0
+    private var labelPreparationComplete: Bool
+    private var lastDiagnosticsTime: TimeInterval = 0
+    private var lastDiagnosticsLogTime: TimeInterval = 0
     private var motionTarget: SkyMotionReading?
     private var lastPublishedCameraState: SkyCameraState?
     private var isApplicationActive = true
     private var isViewVisible = true
-    private var isTimePlaybackActive = false
     private var renderingSuspended = false
     private var renderPolicy: SkyRenderPolicy = .idleWarm
-    private var keepAliveTask: Task<Void, Never>?
+    private var interactionRenderPolicy = SkyInteractionRenderPolicy()
+    private var interactionRenderProfile = SkyInteractionRenderProfile.full
+    private var isInteractionPerformanceWindowActive = false
+    private var environmentRenderAdaptationProfile = SkyRenderAdaptationProfile.normal
+    private var renderAdaptationProfile = SkyRenderAdaptationProfile.normal
+    private var performanceGovernor = SkyPerformanceGovernor()
+    private var lastRenderEnvironment: SkyRenderEnvironment?
     private var debugFrameCounter = 0
-    private nonisolated let frameUpdateLock = OSAllocatedUnfairLock(initialState: FrameUpdateState())
+    private nonisolated let frameMailbox = FrameUpdateMailbox()
+    private var frameConsumerTask: Task<Void, Never>?
 
     public init(
         sceneView: SCNView = SCNView(frame: .zero),
         catalog: SkySceneCatalog? = nil,
-        astronomy: any AstronomyCalculating = AstronomyService()
+        astronomy: any AstronomyCalculating = AstronomyService(),
+        labelVisibilityMode: SkyLabelVisibilityMode = .adaptive
     ) {
         self.sceneView = sceneView
         self.catalog = catalog
         self.astronomy = astronomy
+        self.labelVisibilityMode = labelVisibilityMode
         self.celestialRootNode = SCNNode()
         self.starsNode = SCNNode()
+        self.faintStarsNode = SCNNode()
         self.linesNode = SCNNode()
         self.horizonNode = SCNNode(geometry: StarGeometryFactory.makeHorizon())
         self.dynamicRootNode = SCNNode()
@@ -104,8 +126,11 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         self.camera = camera
         self.selectionNode = StarGeometryFactory.makeSelectionNode()
         self.labelOverlayScene = SkyLabelOverlayScene(size: CGSize(width: 1, height: 1))
+        self.labelPreparationComplete = labelVisibilityMode == .adaptive
 
         super.init()
+
+        labelOverlayScene.configure(visibilityMode: labelVisibilityMode)
 
 #if os(macOS)
         sceneView.backgroundColor = NSColor(red: 0.008, green: 0.024, blue: 0.055, alpha: 1)
@@ -127,8 +152,10 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
 
         celestialRootNode.name = "celestialRoot"
         starsNode.name = "starsNode"
+        faintStarsNode.name = "faintStarsNode"
         linesNode.name = "linesNode"
         celestialRootNode.addChildNode(starsNode)
+        celestialRootNode.addChildNode(faintStarsNode)
         celestialRootNode.addChildNode(linesNode)
         scene.rootNode.addChildNode(celestialRootNode)
 
@@ -145,6 +172,13 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         sceneView.delegate = self
         updateCamera(SkyCameraState(), selectedObjectID: nil, notify: false)
         lastPublishedCameraState = currentCameraState
+        startFrameConsumer()
+    }
+
+    deinit {
+        frameConsumerTask?.cancel()
+        staticGeometryTask?.cancel()
+        frameMailbox.finish()
     }
 
     public func update(
@@ -153,18 +187,21 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         starScale: CGFloat
     ) {
         wakeRendering()
-        let targetChanged = snapshot.moment != targetSnapshot.moment ||
-            snapshot.observer != targetSnapshot.observer ||
-            targetSnapshot.positions.isEmpty
+        let targetChanged = !hasAppliedSceneTarget ||
+            snapshot.moment != targetSnapshot.moment ||
+            snapshot.observer != targetSnapshot.observer
         let scaleChanged = staticGeometryScale != starScale
         self.showConstellations = showConstellations
         self.starScale = starScale
 
         if let catalog {
             if !hasBuiltStaticGeometry || scaleChanged {
-                buildStaticGeometry(catalog: catalog, scale: starScale)
+                scheduleStaticGeometryBuild(catalog: catalog, scale: starScale)
+            } else if staticGeometryTask != nil {
+                cancelStaticGeometryBuild()
             }
-            starsNode.isHidden = false
+            starsNode.isHidden = !hasBuiltStaticGeometry
+            updateFaintStarVisibility()
             linesNode.isHidden = !showConstellations
             horizonNode.isHidden = !showConstellations
         } else {
@@ -177,6 +214,8 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
             if key != geometryKey {
                 geometryKey = key
                 starsNode.geometry = StarGeometryFactory.makeStars(snapshot.positions, scale: starScale)
+                faintStarsNode.geometry = nil
+                updateFaintStarVisibility()
                 linesNode.geometry = showConstellations
                     ? StarGeometryFactory.makeConstellationLines(snapshot.constellationSegments)
                     : nil
@@ -243,8 +282,12 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     }
 
     public func synchronizeCamera(_ state: SkyCameraState, selectedObjectID: String?) {
-        wakeRendering()
-        self.selectedObjectID = selectedObjectID
+        if self.selectedObjectID != selectedObjectID {
+            self.selectedObjectID = selectedObjectID
+            updateSelection()
+            updateLabelSourcesIfNeeded()
+            wakeRendering()
+        }
         if isUserInteracting {
             return
         }
@@ -252,14 +295,16 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
            Self.cameraStatesAreApproximatelyEqual(state, lastPublishedCameraState) {
             return
         }
+        wakeRendering()
         cameraMotion.animate(to: state)
-        updateLabelSourcesIfNeeded()
         updateContinuousRenderingMode()
     }
 
     public func beginCameraInteraction() {
         isUserInteracting = true
+        isInteractionPerformanceWindowActive = true
         cameraMotion.beginInteraction()
+        refreshInteractionRenderProfile()
         updateContinuousRenderingMode()
     }
 
@@ -279,6 +324,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
             rollVelocity: rollVelocity
         )
         if !cameraMotion.isMoving {
+            finishInteractionPerformanceWindow()
             let state = currentCameraState
             lastPublishedCameraState = state
             onCameraSettled?(state)
@@ -358,12 +404,10 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     }
 
     public func setMotionReading(_ reading: SkyMotionReading?) {
-        motionTarget = reading
-        if reading != nil {
-            wakeRendering()
-        } else {
-            updateContinuousRenderingMode()
-        }
+        let wasFollowingMotion = motionTarget != nil
+        motionTarget = isApplicationActive && isViewVisible ? reading : nil
+        guard wasFollowingMotion != (motionTarget != nil) else { return }
+        updateContinuousRenderingMode()
     }
 
     public func resetMetrics() {
@@ -371,18 +415,86 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     }
 
     public func setApplicationActive(_ active: Bool, isVisible: Bool) {
+        let wasBlocked = !isApplicationActive || !isViewVisible
         isApplicationActive = active
         isViewVisible = isVisible
         if active && isVisible {
-            wakeRendering()
+            if wasBlocked {
+                wakeRendering()
+                updateContinuousRenderingMode()
+            }
         } else {
             suspendRendering()
         }
     }
 
-    public func setTimePlaybackActive(_ active: Bool) {
-        isTimePlaybackActive = active
-        updateContinuousRenderingMode()
+    public func updateRenderEnvironment(_ environment: SkyRenderEnvironment) {
+        let previousPressure = lastRenderEnvironment?.memoryPressure ?? .normal
+        lastRenderEnvironment = environment
+        if environment.memoryPressure != .normal,
+           environment.memoryPressure != previousPressure {
+            labelOverlayScene.trimIdleResources()
+            labelProjectionKey = nil
+            cachedObjectVisuals.removeAll(keepingCapacity: true)
+            cachedCardinalVisuals.removeAll(keepingCapacity: true)
+            requestSceneDisplay()
+        }
+        environmentRenderAdaptationProfile = SkyRenderAdaptationPolicy.profile(for: environment)
+        applyEffectiveRenderAdaptationProfile()
+    }
+
+    public func shutdown() {
+        onCameraChange = nil
+        onCameraSettled = nil
+        onDiagnosticsChange = nil
+        onLabelReadinessChange = nil
+        frameMailbox.setEnabled(false)
+        frameMailbox.finish()
+        frameConsumerTask?.cancel()
+        frameConsumerTask = nil
+        cancelStaticGeometryBuild()
+        sceneView.delegate = nil
+        sceneView.rendersContinuously = false
+        sceneView.isPlaying = false
+        sceneView.overlaySKScene = nil
+    }
+
+    private func applyRenderAdaptationProfile(_ profile: SkyRenderAdaptationProfile) {
+        let changed = profile != renderAdaptationProfile
+        renderAdaptationProfile = profile
+        applyPreferredFramesPerSecond()
+        switch profile.antialiasing {
+        case .multisampling2X:
+            sceneView.antialiasingMode = .multisampling2X
+        case .disabled:
+            sceneView.antialiasingMode = .none
+        }
+        updateFaintStarVisibility()
+        if changed {
+            labelProjectionKey = nil
+            requestSceneDisplay()
+        }
+    }
+
+    private func applyEffectiveRenderAdaptationProfile() {
+        let profile: SkyRenderAdaptationProfile
+        switch performanceGovernor.level {
+        case .normal:
+            profile = environmentRenderAdaptationProfile
+        case .elevated:
+            profile = SkyRenderAdaptationPolicy.mostConstrained(
+                environmentRenderAdaptationProfile,
+                .elevated
+            )
+        case .critical:
+            profile = .critical
+        }
+        guard profile != renderAdaptationProfile else { return }
+        applyRenderAdaptationProfile(profile)
+    }
+
+    private func applyPreferredFramesPerSecond() {
+        sceneView.preferredFramesPerSecond = renderAdaptationProfile.preferredFramesPerSecond
     }
 
     var debugCelestialRootNode: SCNNode { celestialRootNode }
@@ -393,13 +505,27 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     var debugTransitionDuration: TimeInterval { transitionDuration }
     var debugRendersContinuously: Bool { sceneView.rendersContinuously }
     var debugSceneIsPlaying: Bool { sceneView.isPlaying }
-    var debugRenderingEnabled: Bool { frameUpdateLock.withLock { $0.isEnabled } }
+    var debugRenderingEnabled: Bool { frameMailbox.isEnabled }
     var debugRenderPolicy: SkyRenderPolicy { renderPolicy }
-    var debugKeepAliveScheduled: Bool { keepAliveTask != nil }
     var debugLabelProjectionRecomputeCount: Int { labelProjectionRecomputeCount }
     var debugLabelSourceRevision: Int { labelSourceRevision }
     var debugLabelSourceObjectIDs: [String] { labelSources.map(\.object.id) }
-    var debugLabelCapacity: Int { labelCapacityPolicy.capacity }
+    var debugLabelCapacity: Int {
+        if labelVisibilityMode == .alwaysVisible {
+            return labelSources.count
+        }
+        return min(
+            labelCapacityPolicy.capacity,
+            interactionRenderProfile.labelCapacityLimit ?? .max,
+            renderAdaptationProfile.labelCapacityLimit ?? .max
+        )
+    }
+    var debugLabelNodeCount: Int { labelOverlayScene.debugObjectNodeCount }
+    var debugPendingLabelTextUpdateCount: Int { labelOverlayScene.pendingTextUpdateCount }
+    var debugDisplayedObjectIDs: Set<String> { labelOverlayScene.displayedObjectIDs }
+    var debugFaintStarsIsHidden: Bool { faintStarsNode.isHidden }
+    var debugInteractionRenderProfile: SkyInteractionRenderProfile { interactionRenderProfile }
+    var debugRenderAdaptationProfile: SkyRenderAdaptationProfile { renderAdaptationProfile }
     var debugHasPendingLabelTextUpdates: Bool { labelOverlayScene.hasPendingTextUpdates }
 
     func debugRefreshContinuousRenderingMode() {
@@ -410,8 +536,16 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         updateAnimation(at: time)
     }
 
+    func debugSimulateFrame(at time: TimeInterval) {
+        updateFrame(at: time)
+    }
+
     func debugRefreshLabels() {
-        updateOverlayLabels()
+        updateOverlayLabels(force: true)
+    }
+
+    func debugWaitForStaticGeometry() async {
+        await staticGeometryTask?.value
     }
 
     func debugOverlayPoint(
@@ -423,27 +557,48 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
 
 
     public nonisolated func renderer(_ renderer: any SCNSceneRenderer, updateAtTime time: TimeInterval) {
-        let shouldSchedule = frameUpdateLock.withLock { state -> Bool in
-            guard state.isEnabled, !state.isScheduled else { return false }
-            state.isScheduled = true
-            return true
-        }
-        guard shouldSchedule else { return }
+        frameMailbox.submit(time: time)
+    }
 
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            if self.isApplicationActive && self.isViewVisible {
-                self.updateFrame(at: time)
-                self.updateContinuousRenderingMode()
+    private func startFrameConsumer() {
+        frameConsumerTask?.cancel()
+        frameConsumerTask = Task { @MainActor [weak self] in
+            guard let mailbox = self?.frameMailbox else { return }
+            for await time in mailbox.stream {
+                guard !Task.isCancelled else { return }
+                guard let self else {
+                    mailbox.finish()
+                    return
+                }
+                if self.isApplicationActive && self.isViewVisible {
+                    self.updateFrame(at: time)
+                    self.updateContinuousRenderingMode()
+                }
+                mailbox.completeFrame()
             }
-            self.frameUpdateLock.withLock { $0.isScheduled = false }
         }
     }
 
     private func updateFrame(at time: TimeInterval) {
-        metrics.recordFrame(at: time)
+        let isActiveRenderingWindow = renderPolicy == .interactive ||
+            renderPolicy == .animating ||
+            needsLabelTextWarmup
+        if isActiveRenderingWindow {
+            metrics.recordFrame(at: time)
+        } else {
+            metrics.resetSampling()
+        }
+        if renderPolicy == .interactive || renderPolicy == .animating {
+            let previousLevel = performanceGovernor.level
+            let nextLevel = performanceGovernor.update(metrics: metrics, at: time)
+            if nextLevel != previousLevel {
+                metrics.resetSampling()
+                applyEffectiveRenderAdaptationProfile()
+            }
+        }
         updateAnimation(at: time)
         updateOverlayLabels()
+        publishDiagnosticsIfNeeded(at: time)
 #if DEBUG
         debugFrameCounter += 1
         if debugFrameCounter % 120 == 0 || metrics.consecutiveSlowFrames >= 3 {
@@ -453,6 +608,48 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
             SkyTraceDiagnostics.event("FrameMetricsReport")
         }
 #endif
+    }
+
+    private func publishDiagnosticsIfNeeded(at time: TimeInterval) {
+        let shouldPublish = onDiagnosticsChange != nil &&
+            (lastDiagnosticsTime == 0 || time - lastDiagnosticsTime >= 1)
+        let shouldLog = lastDiagnosticsLogTime == 0 || time - lastDiagnosticsLogTime >= 5
+        guard shouldPublish || shouldLog else { return }
+
+        let diagnostics = SkyRenderDiagnostics(
+            renderQuality: renderAdaptationProfile.quality,
+            renderActivity: currentRenderActivity,
+            p95FrameInterval: metrics.p95FrameInterval,
+            p99FrameInterval: metrics.p99FrameInterval,
+            cumulativeP95FrameInterval: metrics.cumulativeP95FrameInterval,
+            cumulativeP99FrameInterval: metrics.cumulativeP99FrameInterval,
+            cumulativeFrameCount: metrics.cumulativeMeasuredFrameCount,
+            longestFrameInterval: metrics.longestFrameInterval,
+            mainThreadStallCount: metrics.mainThreadStallCount,
+            labelNodeCount: labelOverlayScene.debugObjectNodeCount,
+            pendingLabelTextUpdates: labelOverlayScene.pendingTextUpdateCount,
+            geometryRebuildCount: metrics.geometryRebuildCount,
+            labelSourceCount: labelSources.count,
+            displayedLabelCount: labelOverlayScene.displayedObjectIDs.count,
+            residentMemoryBytes: SkyProcessMemory.residentBytes()
+        )
+        if shouldPublish {
+            lastDiagnosticsTime = time
+            onDiagnosticsChange?(diagnostics)
+        }
+        if shouldLog {
+            lastDiagnosticsLogTime = time
+            SkyTraceDiagnostics.frames.info(
+                "Render diagnostics quality=\(diagnostics.renderQuality.rawValue, privacy: .public) activity=\(diagnostics.renderActivity.rawValue, privacy: .public) p95=\(diagnostics.p95FrameInterval, privacy: .public) p99=\(diagnostics.p99FrameInterval, privacy: .public) labels=\(diagnostics.displayedLabelCount, privacy: .public) rss=\(diagnostics.residentMemoryBytes, privacy: .public)"
+            )
+        }
+    }
+
+    private var currentRenderActivity: SkyRenderActivity {
+        if renderPolicy == .suspended { return .suspended }
+        if renderPolicy == .interactive { return .interactive }
+        if renderPolicy == .animating { return .animating }
+        return needsLabelTextWarmup ? .warmup : .idle
     }
 
     private var needsLabelTextWarmup: Bool {
@@ -467,37 +664,38 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
             metrics.resetSampling()
             renderingSuspended = false
         }
-        frameUpdateLock.withLock { $0.isEnabled = true }
-        sceneView.rendersContinuously = renderPolicy.usesContinuousRendering ||
+        frameMailbox.setEnabled(true)
+        let shouldRenderContinuously = renderPolicy.usesContinuousRendering ||
             needsLabelTextWarmup
+        sceneView.rendersContinuously = shouldRenderContinuously
         sceneView.isPlaying = true
-        requestSceneDisplay()
+        if !shouldRenderContinuously {
+            requestSceneDisplay()
+        }
     }
 
     private func suspendRendering() {
         renderingSuspended = true
         isUserInteracting = false
+        resetInteractionPerformanceWindow()
         motionTarget = nil
         cameraMotion.suspend()
+        performanceGovernor.reset()
+        applyEffectiveRenderAdaptationProfile()
         metrics.resetSampling()
-        cancelKeepAlive()
         renderPolicy = .suspended
-        frameUpdateLock.withLock { $0.isEnabled = false }
+        frameMailbox.setEnabled(false)
         sceneView.rendersContinuously = false
         sceneView.isPlaying = false
     }
 
     private func updateContinuousRenderingMode() {
         let previousPolicy = renderPolicy
-        let thermalConstrained = ProcessInfo.processInfo.thermalState == .serious ||
-            ProcessInfo.processInfo.thermalState == .critical
-        let lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
-
         if !isApplicationActive || !isViewVisible {
             renderPolicy = .suspended
         } else if isUserInteracting {
             renderPolicy = .interactive
-        } else if cameraMotion.isMoving || transitionDuration > 0 || isTimePlaybackActive || motionTarget != nil {
+        } else if cameraMotion.isMoving || transitionDuration > 0 || motionTarget != nil {
             renderPolicy = .animating
         } else {
             renderPolicy = .idleWarm
@@ -508,25 +706,21 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
             if previousPolicy == .idleWarm {
                 metrics.resetSampling()
             }
-            cancelKeepAlive()
-            frameUpdateLock.withLock { $0.isEnabled = true }
+            frameMailbox.setEnabled(true)
             sceneView.rendersContinuously = true
             sceneView.isPlaying = true
         case .idleWarm:
             if needsLabelTextWarmup {
-                cancelKeepAlive()
-                frameUpdateLock.withLock { $0.isEnabled = true }
+                frameMailbox.setEnabled(true)
                 sceneView.rendersContinuously = true
                 sceneView.isPlaying = true
             } else {
-                frameUpdateLock.withLock { $0.isEnabled = false }
+                if previousPolicy != .idleWarm {
+                    metrics.resetSampling()
+                }
+                frameMailbox.setEnabled(false)
                 sceneView.rendersContinuously = false
                 sceneView.isPlaying = false
-                if !thermalConstrained && !lowPower {
-                    scheduleKeepAlive()
-                } else {
-                    cancelKeepAlive()
-                }
             }
             requestSceneDisplay()
         case .suspended:
@@ -534,19 +728,32 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         }
     }
 
-    private func scheduleKeepAlive() {
-        guard renderPolicy == .idleWarm, keepAliveTask == nil else { return }
-        keepAliveTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(500))
-            guard let self, !Task.isCancelled else { return }
-            self.keepAliveTask = nil
-            self.wakeRendering()
-        }
+    private func refreshInteractionRenderProfile() {
+        let profile = interactionRenderPolicy.update(
+            isInteractionActive: isInteractionPerformanceWindowActive,
+            fieldOfView: currentCameraState.fieldOfView
+        )
+        guard profile != interactionRenderProfile else { return }
+        interactionRenderProfile = profile
+        updateFaintStarVisibility()
     }
 
-    private func cancelKeepAlive() {
-        keepAliveTask?.cancel()
-        keepAliveTask = nil
+    private func finishInteractionPerformanceWindow() {
+        guard isInteractionPerformanceWindowActive else { return }
+        isInteractionPerformanceWindowActive = false
+        refreshInteractionRenderProfile()
+    }
+
+    private func resetInteractionPerformanceWindow() {
+        isInteractionPerformanceWindowActive = false
+        interactionRenderPolicy = SkyInteractionRenderPolicy()
+        interactionRenderProfile = .full
+        updateFaintStarVisibility()
+    }
+
+    private func updateFaintStarVisibility() {
+        faintStarsNode.isHidden = interactionRenderProfile.hidesFaintStars ||
+            renderAdaptationProfile.hidesFaintStars
     }
 
     private func requestSceneDisplay() {
@@ -565,24 +772,91 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         camera.fieldOfView = CGFloat(snapshot.state.fieldOfView)
 
         if publishSettled, wasCameraMoving, !snapshot.isMoving {
+            finishInteractionPerformanceWindow()
             lastPublishedCameraState = snapshot.state
             onCameraSettled?(snapshot.state)
         }
         wasCameraMoving = snapshot.isMoving
     }
 
-    private func buildStaticGeometry(catalog: SkySceneCatalog, scale: CGFloat) {
-        starsNode.geometry = StarGeometryFactory.makeStars(catalog.staticObjects, scale: scale)
-        linesNode.geometry = StarGeometryFactory.makeConstellationLinesFromJ2000(catalog.segments)
+    private func scheduleStaticGeometryBuild(catalog: SkySceneCatalog, scale: CGFloat) {
+        if staticGeometryScaleInFlight == scale, staticGeometryTask != nil {
+            return
+        }
+        cancelStaticGeometryBuild()
+        let generation = staticGeometryGeneration
+        staticGeometryScaleInFlight = scale
+
+        staticGeometryTask = Task { @MainActor [weak self] in
+            guard !Task.isCancelled else { return }
+            let worker = Task.detached(priority: .userInitiated) {
+                let objects = catalog.staticObjects
+                let brightObjects = objects.filter { !SkyInteractionRenderPolicy.isFaintStar($0) }
+                let faintObjects = objects.filter { SkyInteractionRenderPolicy.isFaintStar($0) }
+                let bright = StarGeometryFactory.makeStarGeometryData(objects: brightObjects, scale: scale)
+                let faint = StarGeometryFactory.makeStarGeometryData(objects: faintObjects, scale: scale)
+                return (bright, faint)
+            }
+            let result = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
+
+            guard
+                !Task.isCancelled,
+                let self,
+                generation == self.staticGeometryGeneration
+            else { return }
+            self.installStaticGeometry(
+                brightData: result.0,
+                faintData: result.1,
+                catalog: catalog,
+                scale: scale
+            )
+        }
+    }
+
+    private func cancelStaticGeometryBuild() {
+        staticGeometryGeneration &+= 1
+        staticGeometryTask?.cancel()
+        staticGeometryTask = nil
+        staticGeometryScaleInFlight = nil
+    }
+
+    private func installStaticGeometry(
+        brightData: StarGeometryData,
+        faintData: StarGeometryData,
+        catalog: SkySceneCatalog,
+        scale: CGFloat
+    ) {
+        starsNode.geometry = brightData.isEmpty
+            ? nil
+            : StarGeometryFactory.makeStars(data: brightData)
+        faintStarsNode.geometry = faintData.isEmpty
+            ? nil
+            : StarGeometryFactory.makeStars(data: faintData)
+        if linesNode.geometry == nil {
+            linesNode.geometry = StarGeometryFactory.makeConstellationLinesFromJ2000(catalog.segments)
+        }
+        updateFaintStarVisibility()
+        starsNode.isHidden = false
         staticGeometryScale = scale
+        staticGeometryScaleInFlight = nil
+        staticGeometryTask = nil
         hasBuiltStaticGeometry = true
         metrics.recordGeometryRebuild()
         staticGeometryRebuildCount += 1
+        requestSceneDisplay()
     }
 
-    private func beginTransition(to snapshot: SkySnapshot) {
+    private func beginTransition(
+        to snapshot: SkySnapshot,
+        sceneMatrix: simd_float3x3? = nil,
+        transitionDuration requestedTransitionDuration: TimeInterval = 0.22
+    ) {
         let now = CACurrentMediaTime()
-        previousSnapshot = targetSnapshot
+        let shouldSnap = !hasAppliedSceneTarget
         previousSceneMatrix = currentSceneMatrix
         previousQuaternion = simd_quatf(previousSceneMatrix)
         previousDynamicVectors = currentDynamicVectors
@@ -595,23 +869,33 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         currentSnapshotVectors = catalog == nil
             ? Dictionary(uniqueKeysWithValues: snapshot.positions.map { ($0.id, $0.horizontalVector) })
             : targetDynamicVectors
-        let transform = astronomy.horizontalTransform(for: snapshot.moment, observer: snapshot.observer)
-        targetSceneMatrix = transform.sceneMatrix
+        targetSceneMatrix = sceneMatrix ?? astronomy.horizontalTransform(
+            for: snapshot.moment,
+            observer: snapshot.observer
+        ).sceneMatrix
         targetQuaternion = simd_quatf(targetSceneMatrix)
         transitionStartTime = now
         ensureDynamicNodes(for: dynamicPositions)
 
-        if previousSnapshot.positions.isEmpty {
+        if shouldSnap {
             previousSceneMatrix = targetSceneMatrix
             previousQuaternion = targetQuaternion
             currentSceneMatrix = targetSceneMatrix
             previousDynamicVectors = targetDynamicVectors
             currentDynamicVectors = targetDynamicVectors
             celestialRootNode.simdOrientation = targetQuaternion
+            updateDynamicNodePositions()
             transitionDuration = 0
         } else {
-            transitionDuration = 0.22
+            transitionDuration = min(1, max(0, requestedTransitionDuration))
+            if transitionDuration == 0 {
+                previousQuaternion = targetQuaternion
+                previousSceneMatrix = targetSceneMatrix
+                previousDynamicVectors = targetDynamicVectors
+                currentDynamicVectors = targetDynamicVectors
+            }
         }
+        hasAppliedSceneTarget = true
         rebuildSnapshotVectors()
         updateLabelSourcesIfNeeded()
     }
@@ -627,6 +911,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
 
         let cameraSnapshot = cameraMotion.update(at: time)
         applyCameraMotionSnapshot(cameraSnapshot, publishSettled: true)
+        refreshInteractionRenderProfile()
 
         let progress: Float
         if transitionDuration > 0 {
@@ -650,19 +935,24 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
     }
 
     private func updateDynamicVectors(progress: Float) {
-        let ids = Set(targetDynamicVectors.keys).union(previousDynamicVectors.keys)
-        for id in ids {
-            let target = targetDynamicVectors[id] ?? previousDynamicVectors[id]
-            guard let target else { continue }
+        if progress >= 1 {
+            currentDynamicVectors = targetDynamicVectors
+            return
+        }
+
+        for (id, target) in targetDynamicVectors {
             guard
                 let previous = previousDynamicVectors[id],
-                progress < 1,
                 let current = slerp(previous, target, progress)
             else {
                 currentDynamicVectors[id] = target
                 continue
             }
             currentDynamicVectors[id] = current
+        }
+
+        for id in previousDynamicVectors.keys where targetDynamicVectors[id] == nil {
+            currentDynamicVectors[id] = previousDynamicVectors[id]
         }
     }
 
@@ -715,17 +1005,8 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
         let point = direction * (StarGeometryFactory.skyRadius * 0.98)
         selectionNode.position = SCNVector3(Float(point.x), Float(point.y), Float(point.z))
         selectionNode.isHidden = false
-        if selectionNode.action(forKey: "pulse") == nil {
-            selectionNode.runAction(
-                SCNAction.repeatForever(
-                    SCNAction.sequence([
-                        SCNAction.scale(to: 1.25, duration: 0.7),
-                        SCNAction.scale(to: 0.92, duration: 0.7)
-                    ])
-                ),
-                forKey: "pulse"
-            )
-        }
+        selectionNode.removeAction(forKey: "pulse")
+        selectionNode.scale = SCNVector3(1, 1, 1)
     }
 
     private func displayVector(for objectID: String) -> Vector3D? {
@@ -787,17 +1068,57 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
             return lhs.object.id < rhs.object.id
         }
         labelSourceRevision &+= 1
-        labelOverlayScene.queuePrewarm(texts: Array(labelSources.prefix(100).map(\.object.name)))
+        prepareLabelResources()
     }
 
-    private func updateOverlayLabels() {
-        let start = CACurrentMediaTime()
+    private func prepareLabelResources() {
+        if labelVisibilityMode == .alwaysVisible {
+            labelPreparationComplete = false
+            onLabelReadinessChange?(false)
+            labelOverlayScene.prepareObjectLabels(
+                labelSources.map {
+                    SkyObjectLabelSeed(
+                        id: $0.object.id,
+                        text: $0.object.name,
+                        kind: $0.object.kind
+                    )
+                }
+            )
+        } else {
+            labelOverlayScene.queuePrewarm(
+                texts: Array(labelSources.prefix(100).map(\.object.name))
+            )
+        }
+        refreshLabelPreparationState()
+    }
+
+    private func refreshLabelPreparationState() {
+        let complete = labelVisibilityMode == .adaptive ||
+            (labelSourceKey != nil && !labelOverlayScene.hasPendingTextUpdates)
+        guard complete != labelPreparationComplete else { return }
+        labelPreparationComplete = complete
+        onLabelReadinessChange?(complete)
+    }
+
+    private func updateOverlayLabels(force: Bool = false) {
+        let now = CACurrentMediaTime()
         let size = sceneView.bounds.size
         guard size.width > 0, size.height > 0 else { return }
+        let start = now
 
-        let visibleCapacity = labelCapacityPolicy.update(
-            fieldOfView: currentCameraState.fieldOfView
-        )
+        let visibleCapacity: Int
+        if labelVisibilityMode == .alwaysVisible {
+            visibleCapacity = labelSources.count
+        } else {
+            let baseCapacity = labelCapacityPolicy.update(
+                fieldOfView: currentCameraState.fieldOfView
+            )
+            visibleCapacity = min(
+                baseCapacity,
+                interactionRenderProfile.labelCapacityLimit ?? .max,
+                renderAdaptationProfile.labelCapacityLimit ?? .max
+            )
+        }
         let cacheKey = LabelProjectionKey(
             camera: currentCameraState,
             sceneMatrix: currentSceneMatrix.floatValues,
@@ -808,7 +1129,13 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
             labelCapacity: visibleCapacity
         )
         if cacheKey == labelProjectionKey {
-            labelOverlayScene.apply(visuals: cachedObjectVisuals, cardinals: cachedCardinalVisuals)
+            if labelOverlayScene.hasPendingTextUpdates {
+                labelOverlayScene.apply(
+                    visuals: cachedObjectVisuals,
+                    cardinals: cachedCardinalVisuals
+                )
+                refreshLabelPreparationState()
+            }
             metrics.recordLabelProjection(duration: CACurrentMediaTime() - start)
             return
         }
@@ -839,42 +1166,61 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
             }
         }
 
-        let previousObjectIDs = Set(cachedObjectVisuals.map(\.id))
-        let forward = cameraMotion.basis.forward
-        var mandatory: [SkyLabelVisual] = []
-        var resident: [SkyLabelVisual] = []
-        var newcomers: [SkyLabelVisual] = []
-
-        for source in labelSources {
-            guard let direction = displayVector(for: source.object.id) else { continue }
-            let wasIncluded = previousObjectIDs.contains(source.object.id)
-            let depth = Vector3D.dot(direction, forward)
-            guard SkyLabelEligibilityPolicy.isDepthEligible(depth, wasIncluded: wasIncluded) else { continue }
-            guard let point = overlayPoint(
-                for: direction,
-                size: size,
-                wasIncluded: wasIncluded
-            ) else { continue }
-            let visual = SkyLabelVisual(
-                id: source.object.id,
-                text: source.object.name,
-                point: point,
-                kind: source.object.kind,
-                selected: source.object.id == selectedObjectID
-            )
-            if Self.isMandatoryLabel(visual, selectedObjectID: selectedObjectID) {
-                mandatory.append(visual)
-            } else if wasIncluded {
-                resident.append(visual)
-            } else {
-                newcomers.append(visual)
+        var visibleVisuals: [SkyLabelVisual] = []
+        visibleVisuals.reserveCapacity(labelSources.count)
+        if labelVisibilityMode == .alwaysVisible {
+            for source in labelSources {
+                guard let direction = displayVector(for: source.object.id) else { continue }
+                guard let point = overlayPoint(for: direction, size: size) else { continue }
+                visibleVisuals.append(
+                    SkyLabelVisual(
+                        id: source.object.id,
+                        text: source.object.name,
+                        point: point,
+                        kind: source.object.kind,
+                        selected: source.object.id == selectedObjectID
+                    )
+                )
             }
+        } else {
+            let previousObjectIDs = Set(cachedObjectVisuals.map(\.id))
+            let forward = cameraMotion.basis.forward
+            var mandatory: [SkyLabelVisual] = []
+            var resident: [SkyLabelVisual] = []
+            var newcomers: [SkyLabelVisual] = []
+
+            for source in labelSources {
+                guard let direction = displayVector(for: source.object.id) else { continue }
+                let wasIncluded = previousObjectIDs.contains(source.object.id)
+                let depth = Vector3D.dot(direction, forward)
+                guard SkyLabelEligibilityPolicy.isDepthEligible(depth, wasIncluded: wasIncluded) else { continue }
+                guard let point = overlayPoint(
+                    for: direction,
+                    size: size,
+                    wasIncluded: wasIncluded
+                ) else { continue }
+                let visual = SkyLabelVisual(
+                    id: source.object.id,
+                    text: source.object.name,
+                    point: point,
+                    kind: source.object.kind,
+                    selected: source.object.id == selectedObjectID
+                )
+                if Self.isMandatoryLabel(visual, selectedObjectID: selectedObjectID) {
+                    mandatory.append(visual)
+                } else if wasIncluded {
+                    resident.append(visual)
+                } else {
+                    newcomers.append(visual)
+                }
+            }
+
+            visibleVisuals = SkyLabelCandidateAllocator.ordered(
+                [mandatory, resident, newcomers],
+                capacity: visibleCapacity
+            )
         }
 
-        let visibleVisuals = SkyLabelCandidateAllocator.ordered(
-            [mandatory, resident, newcomers],
-            capacity: visibleCapacity
-        )
         cachedObjectVisuals = visibleVisuals
         cachedCardinalVisuals = cardinalVisuals
         labelProjectionKey = cacheKey
@@ -882,6 +1228,7 @@ public final class SkySceneController: NSObject, SCNSceneRendererDelegate {
             visuals: cachedObjectVisuals,
             cardinals: cachedCardinalVisuals
         )
+        refreshLabelPreparationState()
         metrics.recordLabelProjection(duration: CACurrentMediaTime() - start)
     }
 
@@ -1009,9 +1356,72 @@ private extension simd_float3x3 {
     }
 }
 
-private struct FrameUpdateState: Sendable {
-    var isScheduled = false
+private struct FrameUpdateMailboxState: Sendable {
     var isEnabled = true
+    var isPending = false
+    var pendingTime: TimeInterval?
+}
+
+private final class FrameUpdateMailbox: @unchecked Sendable {
+    let stream: AsyncStream<TimeInterval>
+
+    private let continuation: AsyncStream<TimeInterval>.Continuation
+    private let lock = OSAllocatedUnfairLock(initialState: FrameUpdateMailboxState())
+
+    init() {
+        var continuation: AsyncStream<TimeInterval>.Continuation?
+        stream = AsyncStream(bufferingPolicy: .bufferingNewest(1)) {
+            continuation = $0
+        }
+        self.continuation = continuation!
+    }
+
+    var isEnabled: Bool {
+        lock.withLock(\.isEnabled)
+    }
+
+    func setEnabled(_ enabled: Bool) {
+        lock.withLock { state in
+            state.isEnabled = enabled
+            if !enabled {
+                state.isPending = false
+                state.pendingTime = nil
+            }
+        }
+    }
+
+    func submit(time: TimeInterval) {
+        let shouldYield = lock.withLock { state -> Bool in
+            guard state.isEnabled else { return false }
+            if state.isPending {
+                state.pendingTime = time
+                return false
+            }
+            state.isPending = true
+            return true
+        }
+        if shouldYield {
+            continuation.yield(time)
+        }
+    }
+
+    func completeFrame() {
+        let nextTime = lock.withLock { state -> TimeInterval? in
+            if let pendingTime = state.pendingTime {
+                state.pendingTime = nil
+                return pendingTime
+            }
+            state.isPending = false
+            return nil
+        }
+        if let nextTime {
+            continuation.yield(nextTime)
+        }
+    }
+
+    func finish() {
+        continuation.finish()
+    }
 }
 
 private struct GeometryKey: Equatable {

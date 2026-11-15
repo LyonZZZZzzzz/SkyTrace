@@ -37,6 +37,9 @@ public actor ObservationPlanner: ObservationPlanning {
         defer { SkyTraceDiagnostics.event("ObservationPlanCompleted") }
         let night = observationNight(for: moment, observer: observer)
         let moon = moonObservation(for: night, moment: moment, observer: observer)
+        guard !Task.isCancelled else {
+            return cancelledPlan(moment: moment, observer: observer, night: night, moon: moon)
+        }
 
         guard let darkStart = night.effectiveDarkStart, let darkEnd = night.effectiveDarkEnd, darkStart < darkEnd else {
             return ObservationPlan(
@@ -62,6 +65,9 @@ public actor ObservationPlanner: ObservationPlanning {
         visibilities.reserveCapacity(eligible.count)
 
         for object in eligible {
+            guard !Task.isCancelled else {
+                return cancelledPlan(moment: moment, observer: observer, night: night, moon: moon)
+            }
             guard let visibility = visibility(
                 for: object,
                 darkStart: darkStart,
@@ -105,17 +111,33 @@ public actor ObservationPlanner: ObservationPlanning {
         )
     }
 
+    private func cancelledPlan(
+        moment: SkyMoment,
+        observer: ObserverContext,
+        night: ObservationNight,
+        moon: MoonObservation
+    ) -> ObservationPlan {
+        ObservationPlan(
+            moment: moment,
+            observer: observer,
+            night: night,
+            moon: moon,
+            recommendations: [],
+            favoriteVisibilities: [],
+            warningMessage: nil
+        )
+    }
+
     private func observationNight(for moment: SkyMoment, observer: ObserverContext) -> ObservationNight {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = observer.timeZone
         let startOfToday = calendar.startOfDay(for: moment.date)
         let localHour = calendar.component(.hour, from: moment.date)
-        let anchorDay = localHour < 12
-            ? calendar.date(byAdding: .day, value: -1, to: startOfToday)!
-            : startOfToday
-        let noon = calendar.date(byAdding: .hour, value: 12, to: anchorDay)!
-        let nextNoon = calendar.date(byAdding: .day, value: 1, to: noon)!
-        let nextMidnight = calendar.date(byAdding: .hour, value: 12, to: noon)!
+        let previousDay = calendar.date(byAdding: .day, value: -1, to: startOfToday) ?? startOfToday
+        let anchorDay = localHour < 12 ? previousDay : startOfToday
+        let noon = calendar.date(byAdding: .hour, value: 12, to: anchorDay) ?? anchorDay
+        let nextNoon = calendar.date(byAdding: .day, value: 1, to: noon) ?? noon
+        let nextMidnight = calendar.date(byAdding: .hour, value: 12, to: noon) ?? noon
 
         let sunEvents = astronomy.riseSet(body: .sun, startDate: noon, observer: observer, searchDays: 1.5)
         let sunset = sunEvents.set
@@ -146,8 +168,8 @@ public actor ObservationPlanner: ObservationPlanning {
             startDate: noon, observer: observer, searchDays: 1.5
         )
 
-        let fallbackNightStart = calendar.date(byAdding: .hour, value: 18, to: anchorDay)!
-        let fallbackNightEnd = calendar.date(byAdding: .hour, value: 6, to: nextMidnight)!
+        let fallbackNightStart = calendar.date(byAdding: .hour, value: 18, to: anchorDay) ?? anchorDay
+        let fallbackNightEnd = calendar.date(byAdding: .hour, value: 6, to: nextMidnight) ?? nextMidnight
         let nightStart = sunset ?? fallbackNightStart
         let nightEnd = sunrise ?? fallbackNightEnd
 
@@ -226,9 +248,11 @@ public actor ObservationPlanner: ObservationPlanning {
         minimumAltitude: Double,
         moon: MoonObservation
     ) -> ObservationVisibility? {
+        guard !Task.isCancelled else { return nil }
         var samples: [(date: Date, altitude: Double)] = []
         var date = darkStart
         while date <= darkEnd {
+            guard !Task.isCancelled else { return nil }
             samples.append((date, altitude(of: object, at: date, observer: observer)))
             date = date.addingTimeInterval(sampleInterval)
         }
@@ -239,6 +263,7 @@ public actor ObservationPlanner: ObservationPlanning {
         var windows: [(start: Date, end: Date, maxAltitude: Double, bestTime: Date)] = []
         var index = 0
         while index < samples.count {
+            guard !Task.isCancelled else { return nil }
             guard samples[index].altitude >= minimumAltitude else {
                 index += 1
                 continue

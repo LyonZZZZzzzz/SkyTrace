@@ -5,6 +5,7 @@ import SwiftUI
 struct MacSkyWorkspaceView: View {
     @Bindable var viewModel: SkyViewModel
     @Bindable var uiState: MacUIState
+    let renderEnvironment: SkyRenderEnvironment
 
     var body: some View {
         ZStack {
@@ -19,7 +20,7 @@ struct MacSkyWorkspaceView: View {
                 starScale: uiState.starScale,
                 labelMagnitudeLimit: uiState.labelDensity.magnitudeLimit,
                 showCardinals: uiState.showCardinals,
-                isTimePlaybackActive: viewModel.isPlaying,
+                renderEnvironment: renderEnvironment,
                 onCameraChange: { viewModel.camera = $0 },
                 onSelect: { objectID in
                     if let objectID {
@@ -28,7 +29,15 @@ struct MacSkyWorkspaceView: View {
                         viewModel.clearSelection()
                     }
                 },
-                onReset: viewModel.resetCamera
+                onReset: viewModel.resetCamera,
+                onDiagnosticsChange: { diagnostics in
+                    uiState.renderDiagnostics = diagnostics
+                },
+                onLabelReadinessChange: { ready in
+                    Task { @MainActor in
+                        uiState.isLabelPreparationComplete = ready
+                    }
+                }
             )
 
 
@@ -57,6 +66,17 @@ struct MacSkyWorkspaceView: View {
                 Spacer()
             }
 
+            if !uiState.isLabelPreparationComplete {
+                Text("正在准备完整星名…")
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .skyPanel(cornerRadius: 10)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .padding(.bottom, 92)
+                    .accessibilityIdentifier("sky-label-preparation-status")
+            }
+
             if let toast = viewModel.toastMessage {
                 Text(toast)
                     .font(.callout.weight(.semibold))
@@ -68,7 +88,7 @@ struct MacSkyWorkspaceView: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            MacTimelineView(viewModel: viewModel)
+            MacTimeControlsView(viewModel: viewModel)
                 .padding(14)
         }
     }

@@ -5,14 +5,59 @@ import SwiftUI
 struct MacContentView: View {
     @Bindable var viewModel: SkyViewModel
     @Bindable var uiState: MacUIState
+    @Bindable var renderEnvironment: SkyRenderEnvironmentMonitor
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
+        Group {
+            switch viewModel.catalogState {
+            case .loading:
+                ProgressView("正在加载离线星表…")
+                    .tint(.skyCyan)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .failed(let message):
+                ContentUnavailableView(
+                    "星表加载失败",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text(message)
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .ready:
+                readyContent
+            }
+        }
+        .task {
+            await viewModel.prepare()
+        }
+        .task(id: scenePhase) {
+            viewModel.setApplicationActive(scenePhase == .active)
+        }
+        .sheet(isPresented: $uiState.showSearch) {
+            MacSearchSheet(viewModel: viewModel)
+        }
+        .sheet(isPresented: $uiState.showLocation) {
+            MacLocationSheet(viewModel: viewModel)
+        }
+        .sheet(isPresented: $uiState.showTonight) {
+            MacTonightSheet(viewModel: viewModel) { object in
+                viewModel.select(object)
+                uiState.showTonight = false
+            }
+        }
+        .background(colorScheme == .dark ? Color.black : Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var readyContent: some View {
         NavigationSplitView(columnVisibility: $uiState.columnVisibility) {
             MacSidebarView(viewModel: viewModel)
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 340)
         } content: {
-            MacSkyWorkspaceView(viewModel: viewModel, uiState: uiState)
+            MacSkyWorkspaceView(
+                viewModel: viewModel,
+                uiState: uiState,
+                renderEnvironment: renderEnvironment.environment
+            )
                 .navigationSplitViewColumnWidth(min: 620, ideal: 860)
         } detail: {
             MacInspectorView(viewModel: viewModel)
@@ -43,13 +88,6 @@ struct MacContentView: View {
                 .help("查看今晚可见目标（⌘T）")
 
                 Button {
-                    viewModel.togglePlayback()
-                } label: {
-                    Label(viewModel.isPlaying ? "暂停" : "播放", systemImage: viewModel.isPlaying ? "pause.fill" : "play.fill")
-                }
-                .help("播放或暂停时间（空格）")
-
-                Button {
                     uiState.showConstellations.toggle()
                 } label: {
                     Label("星座线", systemImage: uiState.showConstellations ? "point.3.connected.trianglepath.dotted" : "point.3.filled.connected.trianglepath.dotted")
@@ -64,18 +102,5 @@ struct MacContentView: View {
                 .help("重置方位与视场")
             }
         }
-        .sheet(isPresented: $uiState.showSearch) {
-            MacSearchSheet(viewModel: viewModel)
-        }
-        .sheet(isPresented: $uiState.showLocation) {
-            MacLocationSheet(viewModel: viewModel)
-        }
-        .sheet(isPresented: $uiState.showTonight) {
-            MacTonightSheet(viewModel: viewModel) { object in
-                viewModel.select(object)
-                uiState.showTonight = false
-            }
-        }
-        .background(colorScheme == .dark ? Color.black : Color(nsColor: .windowBackgroundColor))
     }
 }

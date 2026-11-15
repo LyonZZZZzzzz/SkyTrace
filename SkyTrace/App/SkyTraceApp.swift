@@ -9,11 +9,15 @@ struct SkyTraceApp: App {
         astronomy: AstronomyService(),
         reminderScheduler: UserNotificationScheduler()
     )
+    @State private var renderEnvironment = RenderEnvironmentMonitor()
 
     var body: some Scene {
         WindowGroup {
-            ContentView(viewModel: viewModel)
-                .preferredColorScheme(nil)
+            ContentView(
+                viewModel: viewModel,
+                renderEnvironment: renderEnvironment
+            )
+            .preferredColorScheme(nil)
         }
     }
 }

@@ -1,3 +1,4 @@
+import Foundation
 import SceneKit
 import SkyTraceCore
 import SwiftUI
@@ -15,7 +16,7 @@ struct SkySceneView: UIViewRepresentable {
     let motionEnabled: Bool
     let motionReading: SkyMotionReading?
     let isApplicationActive: Bool
-    let isTimePlaybackActive: Bool
+    let renderEnvironment: SkyRenderEnvironment
 
     let onCameraChange: (SkyCameraState) -> Void
     let onTap: (String?) -> Void
@@ -23,6 +24,10 @@ struct SkySceneView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
+    }
+
+    static func dismantleUIView(_ uiView: SCNView, coordinator: Coordinator) {
+        coordinator.controller.shutdown()
     }
 
     func makeUIView(context: Context) -> SCNView {
@@ -40,7 +45,7 @@ struct SkySceneView: UIViewRepresentable {
     @MainActor
     final class Coordinator: NSObject {
         var parent: SkySceneView
-        var controller: SkySceneController!
+        let controller: SkySceneController
         private var lastPanTranslation = CGPoint.zero
         private var lastPinchScale = 1.0
         private var lastRotation = 0.0
@@ -52,7 +57,7 @@ struct SkySceneView: UIViewRepresentable {
 
         func update() {
             controller.setApplicationActive(parent.isApplicationActive, isVisible: true)
-            controller.setTimePlaybackActive(parent.isTimePlaybackActive)
+            controller.updateRenderEnvironment(parent.renderEnvironment)
             controller.update(
                 snapshot: parent.snapshot,
                 showConstellations: parent.showConstellations,

@@ -2,7 +2,7 @@ import Foundation
 
 /// Pure snapshot construction. It is intentionally independent from the main
 /// actor so the same implementation can be called synchronously by tests and
-/// by the background worker used during time playback.
+/// by the background worker used for full refreshes after manual time changes.
 public enum SkySnapshotBuilder {
     public static func makeSnapshot(
         objects: [CelestialObject],

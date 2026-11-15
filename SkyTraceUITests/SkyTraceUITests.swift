@@ -6,6 +6,15 @@ final class SkyTraceUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    func testLaunchPerformance() {
+        measure(metrics: [XCTApplicationLaunchMetric()]) {
+            let app = XCUIApplication()
+            app.launch()
+            XCTAssertTrue(app.buttons["搜索天体"].waitForExistence(timeout: 8))
+            app.terminate()
+        }
+    }
+
     func testLaunchAndOpenSearch() {
         let app = launchApp()
         let searchButton = app.buttons["搜索天体"]
@@ -39,10 +48,21 @@ final class SkyTraceUITests: XCTestCase {
         let searchButton = app.buttons["搜索天体"]
         XCTAssertTrue(searchButton.waitForExistence(timeout: 8))
 
+        let motionButton = app.buttons["开启姿态跟随"]
+        XCTAssertTrue(motionButton.waitForExistence(timeout: 3))
+        motionButton.tap()
+        XCTAssertTrue(app.buttons["关闭姿态跟随"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["time.select"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["播放时间"].exists)
+
         XCUIDevice.shared.press(.home)
         sleep(2)
         app.activate()
         XCTAssertTrue(searchButton.waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["关闭姿态跟随"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["time.now"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["time.select"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["播放时间"].exists)
 
         let window = app.windows.firstMatch
         let start = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.58))
@@ -66,6 +86,35 @@ final class SkyTraceUITests: XCTestCase {
         XCTAssertTrue(favoritesButton.waitForExistence(timeout: 8))
         favoritesButton.tap()
         XCTAssertTrue(app.navigationBars["收藏"].waitForExistence(timeout: 4))
+    }
+
+
+    func testManualTimeSelectionControls() {
+        let app = launchApp()
+        let nowButton = app.buttons["time.now"]
+        XCTAssertTrue(nowButton.waitForExistence(timeout: 8))
+
+        let selectButton = app.buttons["time.select"]
+        XCTAssertTrue(selectButton.waitForExistence(timeout: 3))
+        selectButton.tap()
+        XCTAssertTrue(app.navigationBars["选择时间"].waitForExistence(timeout: 4))
+        XCTAssertFalse(app.buttons["播放时间"].exists)
+    }
+
+    func testMaximumZoomPanSmoke() {
+        let app = launchApp()
+        let window = app.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 8))
+
+        for _ in 0..<3 {
+            window.pinch(withScale: 0.5, velocity: -2)
+            window.pinch(withScale: 2, velocity: 2)
+        }
+        let start = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.68))
+        let end = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.24))
+        start.press(forDuration: 0.1, thenDragTo: end)
+
+        XCTAssertTrue(app.buttons["搜索天体"].waitForExistence(timeout: 4))
     }
 
     private func launchApp() -> XCUIApplication {
